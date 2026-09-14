@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Aravind HTML Publisher</title>
+  <desc id="desc">A luminous code window nested inside an artifact frame</desc>
+  <defs>
+    <linearGradient id="bg" x1="52" y1="36" x2="452" y2="476" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#242B5C"/><stop offset=".48" stop-color="#11162E"/><stop offset="1" stop-color="#090B13"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="153" y1="126" x2="366" y2="382" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C8D0FF"/><stop offset=".52" stop-color="#8C9CFF"/><stop offset="1" stop-color="#6676E8"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="14"/></filter>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <circle cx="256" cy="254" r="138" fill="#7889FF" opacity=".16" filter="url(#glow)"/>
+  <rect x="112" y="102" width="288" height="308" rx="54" fill="#0C1020" stroke="#FFFFFF" stroke-opacity=".14" stroke-width="8"/>
+  <path d="M112 170h288" stroke="#FFFFFF" stroke-opacity=".13" stroke-width="8"/>
+  <circle cx="153" cy="136" r="8" fill="#FF7C88"/><circle cx="181" cy="136" r="8" fill="#F5C66A"/><circle cx="209" cy="136" r="8" fill="#6BE6AA"/>
+  <path d="M221 226l-54 48 54 48M291 226l54 48-54 48" fill="none" stroke="url(#mark)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M274 208l-36 132" stroke="#E6E9FF" stroke-width="20" stroke-linecap="round"/>
+  <path d="M172 382h168" stroke="#8998FF" stroke-width="10" stroke-linecap="round" opacity=".65"/>
+</svg>

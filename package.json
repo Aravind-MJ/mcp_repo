@@ -1,0 +1,23 @@
+{
+  "name": "personal-mcp-hub",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal MCP hub with shareable HTML artifacts and identified questionnaire submissions",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/index.js",
+    "test": "node --disable-warning=ExperimentalWarning --test",
+    "update-harness-skills": "node scripts/ask-agent-update-user-skills.js",
+    "rotate-secret": "node scripts/rotate-secret.js",
+    "watchdog": "node scripts/watchdog.js",
+    "smoke:questionnaire": "node scripts/smoke-questionnaire.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "express": "5.1.0",
+    "zod": "4.1.5"
+  }
+}
