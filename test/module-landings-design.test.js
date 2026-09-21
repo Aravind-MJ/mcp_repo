@@ -13,7 +13,7 @@ const pages = [
     guide: "/artifact/README.md",
     skill: "/artifact/SKILL.md",
     serverName: "aravind_html_publisher",
-    toolCount: 5,
+    toolCount: 6,
     authCopy: "Bearer authentication required",
   },
   {
@@ -42,6 +42,7 @@ for (const page of pages) {
     assert.ok(page.html.includes(page.endpoint));
     assert.ok(page.html.includes(page.serverName));
     assert.equal((page.html.match(/<li class="tool">/g) || []).length, page.toolCount);
+    assert.match(page.html, new RegExp(`>${page.toolCount} tools<`));
     assert.match(page.html, /<meta name="viewport" content="width=device-width,initial-scale=1">/);
     assert.match(page.html, /class="skip-link" href="#main-content"/);
     assert.match(page.html, /@media \(max-width: 38rem\)/);
@@ -94,7 +95,7 @@ test("questionnaire tools are grouped by lifecycle", () => {
   }
 });
 
-const artifactTools = ["publish_html", "update_artifact", "get_signed_url", "list_artifacts", "delete_artifact"];
+const artifactTools = ["get_attachment_upload_url", "publish_html", "update_artifact", "get_signed_url", "list_artifacts", "delete_artifact"];
 const questionnaireTools = ["create_questionnaire", "update_questionnaire", "get_questionnaire", "list_questionnaires", "get_questionnaire_signed_url", "submit_questionnaire_response", "set_questionnaire_status", "delete_questionnaire", "list_questionnaire_responses", "get_questionnaire_response", "delete_questionnaire_response"];
 
 test("module landing tool registries match the exact MCP tools", () => {

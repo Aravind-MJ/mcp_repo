@@ -1,7 +1,7 @@
 ---
 name: aravind-hosted-html-publisher
 description: Publish HTML to Aravind's authenticated public host.
-version: 1.0.0
+version: 1.1.0
 author: Aravind M J, Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -57,12 +57,12 @@ Do not:
 
 1. Confirm the user wants a public bearer-by-possession link. If the content contains secrets or private data, stop and ask for a safe redacted version.
 2. Create a temporary local working HTML file before publishing. Prefer a workspace scratch path such as `.artifact-work/<descriptive-name>.html` when a workspace is available; otherwise use the harness's temporary directory. Add the scratch directory to the project ignore file when appropriate, and do not commit it.
-3. Produce one complete, self-contained HTML document in that working file. Inline required CSS and JavaScript; external assets may fail under the page sandbox or disappear later. Verify the local file before uploading.
+3. Produce one complete HTML document in that working file. Inline CSS and JavaScript. For images, videos, or downloadable files, follow the artifact-owned attachment workflow below instead of embedding large base64 data or using a separate host. Verify the local file before uploading.
 4. Read the working file and pass its complete contents to the qualified `aravind_html_publisher.publish_html` tool with a concise `title`. Do not bypass the working file by composing the final HTML only inside the MCP call.
 5. Check that the result includes a 24-character alphanumeric `artifact_id` with no punctuation, a SHA-256 digest, and an HTTPS signed URL under the expected host with `expires` and `signature` parameters. The default lifetime is one week.
 6. Keep the working file for the remainder of the task/session and associate it with the returned artifact ID and URL in your task notes. Do not delete it while follow-up revisions are plausible.
 7. Return the URL clearly. Mention that anyone with the link can view it when privacy is relevant.
-8. If verification is required, fetch the returned URL and check that it renders or that its SHA-256 matches the MCP response.
+8. Fetch the returned URL and check the intended content. For attachment-backed HTML, also fetch its rendered asset URLs. The metadata SHA-256 describes stored source with stable references, not the response after signed URL substitution.
 
 ## Follow-up Updates
 
@@ -82,6 +82,20 @@ When an existing link is expired or the user requests another lifetime, call `ar
 
 For a human gallery, open `https://mcp.aravindmj.in/artifacts` and use the owner's HTTP Basic Auth credentials. Hover a card and press the copy button to create and copy a fresh one-week signed link. The adjacent trash button opens the deletion modal; deletion is permanent. For programmatic inventory access, continue using `aravind_html_publisher.list_artifacts` with the MCP bearer token.
 
+## Artifact-owned attachments
+
+Publish the initial document to get its artifact ID, then call `aravind_html_publisher.get_attachment_upload_url`. The returned `upload_url` is an artifact-scoped upload capability valid for 600 seconds, with explicit `expires`, `expires_at`, and `expires_in_seconds` metadata. Append a URL-encoded `filename` query parameter without replacing its signature or expiry. Stream raw bytes with `POST` and `Content-Type`; no Authorization header is needed. This is not multipart or a base64 MCP payload. Keep upload URLs out of generated HTML, logs, and shell history. Reissue an expired capability through MCP. The unsigned endpoint still accepts a protected MCP Bearer credential for backward compatibility.
+
+Retain the returned `artifact-attachment:ID` reference in your local HTML, such as an image `src`, video `src`, CSS `url()`, or download link `href`. Call `update_artifact` with the same artifact ID. The server checks ownership and substitutes an expiring file-specific URL when serving either latest or immutable pages. Do not paste rendered signed asset URLs back into source. Re-uploading creates a new immutable file; older versions retain their original references. Unused uploads persist until artifact deletion. Re-call `get_attachment_upload_url` to list existing files and recover references.
+
+Verify the rendered page and fetch its attachment URLs. Check video range and HEAD responses when playback matters. Unsigned asset paths must fail. HTML, SVG, PDF, and other non-allowlisted MIME types are forced downloads, not inline active documents. Source hashes differ from rendered response hashes when URL substitution occurs.
+
+## Tags and filtering
+
+Pass optional `tags` to publish/update. Tags are trimmed, whitespace-collapsed, lowercased, and deduplicated. There may be at most 20 tags with at most 64 normalized characters each, without empty strings, control characters, or malformed Unicode. Omit tags on update to preserve them; send `[]` to clear them.
+
+Use `list_artifacts` with an optional `tag` for an exact normalized match before limiting results. Its `tags` field contains sorted unique tags from the entire collection, not only the returned artifacts. The private gallery offers the same filter and a clear action. Artifact deletion removes its contribution to the unique-tag list.
+
 ## Pitfalls
 
 - Anyone holding an unexpired signed URL can view it until expiration; treat the URL as a temporary bearer capability.
@@ -90,7 +104,7 @@ For a human gallery, open `https://mcp.aravindmj.in/artifacts` and use the owner
 - Signed links expire independently of the artifact; create a fresh one with `get_signed_url` rather than republishing.
 - Gallery Basic Auth and MCP bearer authentication are separate credentials; never substitute one for the other.
 - CSP sandboxing may block same-origin privileges, object embeds, browser capabilities, or assumptions made by third-party scripts.
-- The default upload limit is 2 MiB.
+- The default HTML limit is 2 MiB. Binary attachments default to 256 MiB per file and 100 files per artifact. Use the limit returned by `get_attachment_upload_url`.
 - Tool prefixes vary by harness. Resolve the tool from the `aravind_html_publisher` server namespace rather than matching only the leaf name `publish_html`.
 - A successful built-in Claude artifact render does not prove this MCP published anything.
 

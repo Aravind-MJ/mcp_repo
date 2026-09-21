@@ -289,7 +289,7 @@ test("publishes, lists, fetches, and deletes through the real MCP protocol", asy
   const client = await mcpClient();
   try {
     const tools = await client.listTools();
-    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), ["delete_artifact", "get_signed_url", "list_artifacts", "publish_html", "update_artifact"]);
+    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), ["delete_artifact", "get_attachment_upload_url", "get_signed_url", "list_artifacts", "publish_html", "update_artifact"]);
 
     const html = "<!doctype html><html><script>document.body.dataset.ok='1'</script><body>Hello</body></html>";
     const published = await client.callTool({ name: "publish_html", arguments: { html, title: " Test   artifact " } });

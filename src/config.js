@@ -23,6 +23,8 @@ export function loadConfig(env = process.env) {
     secretFile: env.MCP_SHARED_SECRET_FILE || path.join(runtimeDir, "secrets", "shared-secret"),
     publicBaseUrl,
     maxHtmlBytes: positiveInteger(env.ARTIFACT_MAX_HTML_BYTES, 2 * 1024 * 1024, "ARTIFACT_MAX_HTML_BYTES"),
+    maxAttachmentBytes: positiveInteger(env.ARTIFACT_MAX_ATTACHMENT_BYTES, 256 * 1024 * 1024, "ARTIFACT_MAX_ATTACHMENT_BYTES"),
+    maxAttachmentsPerArtifact: positiveInteger(env.ARTIFACT_MAX_ATTACHMENTS, 100, "ARTIFACT_MAX_ATTACHMENTS"),
     maxListItems: positiveInteger(env.ARTIFACT_MAX_LIST_ITEMS, 200, "ARTIFACT_MAX_LIST_ITEMS"),
     maxQuestionnaires: positiveInteger(env.QUESTIONNAIRE_MAX_QUESTIONNAIRES ?? env.QUESTIONNAIRE_MAX_ITEMS, 500, "QUESTIONNAIRE_MAX_QUESTIONNAIRES"),
     maxQuestions: positiveInteger(env.QUESTIONNAIRE_MAX_QUESTIONS, 200, "QUESTIONNAIRE_MAX_QUESTIONS"),

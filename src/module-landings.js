@@ -230,6 +230,7 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: .28rem; }
 `;
 
 const artifactTools = `
+  <li class="tool"><code>get_attachment_upload_url</code><p>Get the authenticated binary upload endpoint and existing attachment references.</p></li>
   <li class="tool"><code>publish_html</code><p>Publish a complete self-contained HTML document.</p></li>
   <li class="tool"><code>update_artifact</code><p>Create a new version while preserving the artifact identity.</p></li>
   <li class="tool"><code>get_signed_url</code><p>Mint a fresh expiring link for the latest artifact or one version.</p></li>
@@ -291,7 +292,7 @@ export const ARTIFACT_LANDING_HTML = `<!doctype html>
       </section>
 
       <div class="fact-row" role="list" aria-label="Service facts">
-        <div class="fact" role="listitem"><span class="fact-label">Tool set</span><span class="fact-value">5 tools</span></div>
+        <div class="fact" role="listitem"><span class="fact-label">Tool set</span><span class="fact-value">6 tools</span></div>
         <div class="fact" role="listitem"><span class="fact-label">Recommended name</span><span class="fact-value">aravind_html_publisher</span></div>
         <div class="fact" role="listitem"><span class="fact-label">Default link lifetime</span><span class="fact-value">One week</span></div>
       </div>

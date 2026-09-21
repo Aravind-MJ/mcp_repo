@@ -24,10 +24,10 @@ If you are an agent reading this guide, install the service in the harness where
 2. **Check for an existing registration.** Look for the exact server name `aravind_html_publisher`. If it already exists, update it in place instead of creating a duplicate.
 3. **Register the remote server.** Configure MCP Streamable HTTP at `https://mcp.aravindmj.in/artifact/mcp` under the exact name `aravind_html_publisher`.
 4. **Configure authentication securely.** Source the bearer token from the harness's protected credential store or an environment variable such as `ARAVIND_ARTIFACT_MCP_TOKEN`. Send the bearer authorization header on every MCP request. If the credential is unavailable, stop and ask Aravind to configure it securely.
-5. **Enable the complete toolset.** Enable exactly `publish_html`, `update_artifact`, `get_signed_url`, `list_artifacts`, and `delete_artifact`.
+5. **Enable the complete toolset.** Enable exactly `publish_html`, `update_artifact`, `get_attachment_upload_url`, `get_signed_url`, `list_artifacts`, and `delete_artifact`.
 6. **Install the companion skill.** If the harness supports agent skills, fetch `https://mcp.aravindmj.in/artifact/SKILL.md`, validate that its frontmatter name is `aravind-hosted-html-publisher`, and install it through the harness's native user-level skill mechanism. Update an existing copy rather than creating another one.
 7. **Reload the tool schema.** Reconnect the MCP server or start a new agent session, according to the harness's lifecycle.
-8. **Verify before reporting success.** Confirm authenticated initialization and all five tools. Publish and fetch a harmless disposable page, delete it, and confirm it no longer resolves.
+8. **Verify before reporting success.** Confirm authenticated initialization and all six tools. Publish and fetch a harmless disposable page, delete it, and confirm it no longer resolves.
 9. **Report the result.** State the harness, installation scope, local server name, discovered tools, skill location if applicable, and smoke-test result. Never print the bearer token.
 
 Use the current harness's native CLI, settings UI, or configuration file. Do not copy commands for another harness merely because they appear in this guide.
@@ -100,7 +100,8 @@ Input:
 ```json
 {
   "html": "<!doctype html>...",
-  "title": "Optional private metadata title"
+  "title": "Optional private metadata title",
+  "tags": ["design", "demo"]
 }
 ```
 
@@ -118,11 +119,45 @@ Creates a fresh signed URL for the latest artifact or one immutable version. `ex
 
 ### `list_artifacts`
 
-Lists recent private metadata without returning HTML source.
+Accepts `limit` and an optional `tag` filter. Returns `{ artifacts, tags }`. Filtering happens before the limit. `tags` contains every unique tag across the entire collection, including artifacts outside the result limit or filter. HTML source is omitted.
 
 ### `delete_artifact`
 
-Permanently removes one hosted artifact using the 24-character alphanumeric ID returned by `publish_html`.
+Permanently removes one hosted artifact, every version, and all attachment bytes using the 24-character alphanumeric ID returned by `publish_html`.
+
+## Attachment uploads
+
+Use artifact-owned storage for images, videos, audio, and downloadable files. No separate asset host or base64 MCP payload is required.
+
+1. Publish an initial HTML document to allocate an artifact ID. Do not put attachment references in this first publish.
+2. Call `get_attachment_upload_url` with `artifact_id`. It returns a 600-second artifact-scoped `upload_url`, `expires`, `expires_at`, `expires_in_seconds`, `method: "POST"`, `max_bytes`, and `attachments` with existing file metadata.
+3. Append a URL-encoded `filename` query parameter to `upload_url`, preserving its existing signature and expiry query parameters. POST raw file bytes with a `Content-Type` header, without an Authorization header. This is not multipart form data. The URL grants uploads to this artifact for 600 seconds and may be reused until expiry within its quota. Treat it as a secret: never put it in HTML, logs, or shell history. Use a streaming HTTP client for videos. The unsigned endpoint still accepts the MCP Bearer credential for backward compatibility.
+4. A successful upload returns HTTP `201` and `{ attachment_id, reference, filename, content_type, bytes }`. Retain the exact `reference`, for example `artifact-attachment:AbCdEfGhIjKlMnOpQrStUvWx`.
+5. Use that reference in the retained working HTML and call `update_artifact` with the original artifact ID:
+
+```html
+<img src="artifact-attachment:AbCdEfGhIjKlMnOpQrStUvWx" alt="Uploaded image">
+<video controls src="artifact-attachment:AbCdEfGhIjKlMnOpQrStUvWx"></video>
+<a href="artifact-attachment:AbCdEfGhIjKlMnOpQrStUvWx">Download file</a>
+```
+
+The examples show the reference syntax. Use the appropriate element and the actual ID returned for each uploaded file. References also work in inline CSS and JavaScript strings because the server replaces their literal text before serving HTML. Do not persist the rendered signed asset URL in your source.
+
+Only references owned by that artifact are accepted. Files are immutable; upload a new file and update the HTML to replace one. Uploading alone does not create an HTML version or modify prior HTML. Existing versions keep using their original attachment IDs. Unreferenced uploads remain until artifact deletion and count toward the file limit. Use `get_attachment_upload_url` again to recover existing references after a lost upload response. Retrying POST creates another attachment rather than replacing one.
+
+On signed latest and immutable pages, references become attachment-specific signed URLs with the page's expiry. These signatures cannot authorize an HTML page or another file. Owner Basic Auth page views receive one-hour attachment links. Unsigned attachment URLs never grant access, including with the owner marker or an MCP Bearer header. Sharing an attachment URL grants access only to that file until expiry. Secret rotation invalidates existing asset links. Attachment-backed HTML and binary responses use `private, no-store`; source HTML and its SHA-256 remain unchanged in storage, but rendered response bytes differ.
+
+GET, HEAD, and byte ranges support media playback. PNG, JPEG, GIF, WebP, AVIF, MP4, WebM, Ogg video, MP3, MP4 audio, Ogg audio, WAV, and WebM audio may render inline with their declared supported MIME type. Other MIME types, including HTML, SVG, and PDF, are returned as `application/octet-stream` downloads with `nosniff` and a CSP sandbox. The server does not transcode or verify codecs; choose a MIME type that matches the file. Filenames must be non-empty basenames of at most 180 UTF-8 bytes, without path separators or control characters.
+
+Defaults are 256 MiB per attachment and 100 attachments per artifact. Operators can change `ARTIFACT_MAX_ATTACHMENT_BYTES` and `ARTIFACT_MAX_ATTACHMENTS`. The HTML limit remains separate. Empty or invalid uploads return `400`, missing or wrong authentication returns `401`, oversized uploads return `413`, and a full artifact returns `409`. The server counts streamed chunks even without Content-Length and removes incomplete files after handled upload failures. Deleting an artifact deletes all its files and versions.
+
+## Tags and gallery filters
+
+`publish_html` and `update_artifact` accept an optional `tags` array. Tags are private metadata, not inserted into hosted HTML. The server trims whitespace, collapses internal whitespace, lowercases, and deduplicates while preserving the first occurrence order. Supply at most 20 strings, each with at most 64 characters after whitespace normalization. Empty strings, control characters, and malformed Unicode are rejected. Malformed legacy tag strings are omitted when reading metadata.
+
+Omitting tags on publish produces `[]`. Omitting them on update preserves current tags; passing `[]` clears them. Historical metadata without tags reads as untagged. Versions retain their tag snapshot, while listing and gallery filters use current tags.
+
+`list_artifacts({ "limit": 50, "tag": "design" })` filters by one exact normalized tag before applying the result limit. The response includes `artifacts` and sorted unique `tags` from the entire current collection, not just this page or filter. The private `/artifacts` gallery displays those tags as keyboard-accessible filter chips. Select a tag to filter, or use **Clear filter** to reset. Unknown tags show a no-results message.
 
 ## Verification
 
@@ -130,7 +165,7 @@ A correct installation must satisfy all of these:
 
 1. An unauthenticated request to the MCP endpoint returns HTTP `401`.
 2. Authenticated MCP initialization succeeds.
-3. Tool discovery returns exactly `publish_html`, `update_artifact`, `get_signed_url`, `list_artifacts`, and `delete_artifact`.
+3. Tool discovery returns exactly `publish_html`, `update_artifact`, `get_attachment_upload_url`, `get_signed_url`, `list_artifacts`, and `delete_artifact`.
 4. A harmless test page published with `publish_html` returns an `https://mcp.aravindmj.in/artifact/<id>?expires=...&signature=...` URL.
 5. Fetching that URL returns the test HTML.
 6. Delete the test artifact if it was created only for verification.

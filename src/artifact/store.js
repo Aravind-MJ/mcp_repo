@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmod, mkdir, open, readFile, readdir, rename, rm, unlink } from "node:fs/promises";
 import path from "node:path";
+import { ArtifactAttachments } from "./attachments.js";
 import { ServiceError } from "../errors.js";
 import { createArtifactSignedUrl } from "../security.js";
 
@@ -29,6 +30,7 @@ export class ArtifactStore {
     this.metadataDir = path.join(config.dataDir, "artifact", "metadata");
     this.versionsDir = path.join(config.dataDir, "artifact", "versions");
     this.updateLocks = new Map();
+    this.attachments = new ArtifactAttachments(this);
   }
 
   async initialize() {
@@ -124,10 +126,22 @@ export class ArtifactStore {
     return title.trim().replace(/\s+/g, " ").slice(0, 120) || fallback;
   }
 
-  buildMetadata({ artifactId, title, payload, artifactCreatedAt, version, updatedAt }) {
+  normalizeTags(tags = []) {
+    if (!Array.isArray(tags) || tags.length > 20 || tags.some(tag => typeof tag !== "string" || !tag.isWellFormed() || /[\x00-\x1f\x7f]/.test(tag))) {
+      throw new ServiceError(400, "tags must contain at most 20 strings without control characters");
+    }
+    const normalized = tags.map(tag => tag.trim().replace(/\s+/g, " ").toLowerCase());
+    if (normalized.some(tag => tag.length === 0 || tag.length > 64)) {
+      throw new ServiceError(400, "tags must be non-empty and at most 64 normalized characters");
+    }
+    return [...new Set(normalized)];
+  }
+
+  buildMetadata({ artifactId, title, payload, artifactCreatedAt, version, updatedAt, tags = [] }) {
     return {
       artifact_id: artifactId,
       title,
+      tags,
       url: `${this.config.publicBaseUrl}/artifact/${artifactId}`,
       bytes: payload.length,
       sha256: createHash("sha256").update(payload).digest("hex"),
@@ -154,14 +168,16 @@ export class ArtifactStore {
     }
   }
 
-  async publish(html, title = "Untitled artifact") {
+  async publish(html, title = "Untitled artifact", tags = []) {
     const payload = this.normalizeHtml(html);
     const cleanTitle = this.normalizeTitle(title);
     const artifactId = await this.allocateId();
+    await this.attachments.validateReferences(artifactId, payload);
     const timestamp = new Date().toISOString();
     const metadata = this.buildMetadata({
       artifactId,
       title: cleanTitle,
+      tags: this.normalizeTags(tags),
       payload,
       artifactCreatedAt: timestamp,
       version: 1,
@@ -192,11 +208,12 @@ export class ArtifactStore {
     }
   }
 
-  async update(artifactId, html, title) {
+  async update(artifactId, html, title, tags) {
     const validatedId = this.validateId(artifactId);
     const payload = this.normalizeHtml(html);
     return this.withUpdateLock(validatedId, async () => {
       const currentMetadata = await this.readLatestMetadata(validatedId);
+      await this.attachments.validateReferences(validatedId, payload);
       const cleanTitle = title === undefined
         ? currentMetadata.title
         : this.normalizeTitle(title, currentMetadata.title);
@@ -205,6 +222,7 @@ export class ArtifactStore {
       const metadata = this.buildMetadata({
         artifactId: validatedId,
         title: cleanTitle,
+        tags: tags === undefined ? (currentMetadata.tags || []) : this.normalizeTags(tags),
         payload,
         artifactCreatedAt: currentMetadata.created_at,
         version: nextVersion,
@@ -226,9 +244,15 @@ export class ArtifactStore {
     });
   }
 
+  parseMetadata(raw) {
+    const metadata = JSON.parse(raw);
+    const tags = Array.isArray(metadata.tags) ? metadata.tags.filter(tag => typeof tag === "string" && tag.isWellFormed()) : [];
+    return { ...metadata, tags };
+  }
+
   async readLatestMetadata(artifactId) {
     try {
-      return JSON.parse(await readFile(this.metadataPath(artifactId), "utf8"));
+      return this.parseMetadata(await readFile(this.metadataPath(artifactId), "utf8"));
     } catch (error) {
       if (error instanceof ServiceError) throw error;
       throw new ServiceError(404, "Artifact not found");
@@ -246,15 +270,14 @@ export class ArtifactStore {
         readFile(this.versionHtmlPath(validatedId, selectedVersion)),
         readFile(this.versionMetadataPath(validatedId, selectedVersion), "utf8"),
       ]);
-      return { html, metadata: JSON.parse(rawMetadata) };
+      return { html, metadata: this.parseMetadata(rawMetadata) };
     } catch (error) {
       if (error instanceof ServiceError) throw error;
       throw new ServiceError(404, version === undefined ? "Artifact not found" : "Artifact version not found");
     }
   }
 
-  async list(limit = 50) {
-    const safeLimit = Math.max(1, Math.min(Number.isSafeInteger(limit) ? limit : 50, this.config.maxListItems));
+  async allMetadata() {
     let entries;
     try {
       entries = await readdir(this.metadataDir, { withFileTypes: true });
@@ -265,14 +288,27 @@ export class ArtifactStore {
       .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
       .map(async (entry) => {
         try {
-          return JSON.parse(await readFile(path.join(this.metadataDir, entry.name), "utf8"));
+          return this.parseMetadata(await readFile(path.join(this.metadataDir, entry.name), "utf8"));
         } catch {
           return null;
         }
       }));
     return records.filter(Boolean)
-      .sort((left, right) => (right.updated_at || right.created_at).localeCompare(left.updated_at || left.created_at))
-      .slice(0, safeLimit);
+      .sort((left, right) => (right.updated_at || right.created_at).localeCompare(left.updated_at || left.created_at));
+  }
+
+  async listWithTags(limit = 50, tag) {
+    const selected = tag === undefined ? undefined : this.normalizeTags([tag])[0];
+    const records = await this.allMetadata();
+    const safeLimit = Math.max(1, Math.min(Number.isSafeInteger(limit) ? limit : 50, this.config.maxListItems));
+    return {
+      artifacts: records.filter(item => selected === undefined || item.tags.includes(selected)).slice(0, safeLimit),
+      tags: [...new Set(records.flatMap(item => item.tags))].sort(),
+    };
+  }
+
+  async list(limit = 50, tag) {
+    return (await this.listWithTags(limit, tag)).artifacts;
   }
 
   async listVersions(artifactId) {
@@ -281,7 +317,7 @@ export class ArtifactStore {
     const entries = await readdir(this.versionDir(validatedId), { withFileTypes: true });
     const records = await Promise.all(entries
       .filter((entry) => entry.isFile() && /^\d+\.json$/.test(entry.name))
-      .map(async (entry) => JSON.parse(await readFile(path.join(this.versionDir(validatedId), entry.name), "utf8"))));
+      .map(async (entry) => this.parseMetadata(await readFile(path.join(this.versionDir(validatedId), entry.name), "utf8"))));
     return records.sort((left, right) => right.version - left.version);
   }
 
@@ -300,13 +336,16 @@ export class ArtifactStore {
 
   async delete(artifactId) {
     const validatedId = this.validateId(artifactId);
-    const { metadata } = await this.read(validatedId);
-    await Promise.all([
-      unlink(this.metadataPath(validatedId)).catch((error) => { if (error.code !== "ENOENT") throw error; }),
-      unlink(this.htmlPath(validatedId)).catch((error) => { if (error.code !== "ENOENT") throw error; }),
-      rm(this.versionDir(validatedId), { recursive: true, force: true }),
-    ]);
-    return metadata;
+    return this.withUpdateLock(validatedId, async () => {
+      const { metadata } = await this.read(validatedId);
+      await Promise.all([
+        unlink(this.metadataPath(validatedId)).catch((error) => { if (error.code !== "ENOENT") throw error; }),
+        unlink(this.htmlPath(validatedId)).catch((error) => { if (error.code !== "ENOENT") throw error; }),
+        rm(this.versionDir(validatedId), { recursive: true, force: true }),
+        rm(this.attachments.artifactDir(validatedId), { recursive: true, force: true }),
+      ]);
+      return metadata;
+    });
   }
 
   async migrateLegacyArtifacts() {

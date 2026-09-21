@@ -7,6 +7,8 @@ A Node.js personal MCP service hosting multiple MCP modules under one domain. It
 | Route | Access | Purpose |
 |---|---|---|
 | `POST /artifact/mcp` | Shared bearer secret | Stateless Streamable HTTP MCP endpoint |
+| `POST /artifact/<id>/attachments?filename=<encoded-basename>` | Shared bearer secret | Stream one raw binary attachment |
+| `GET/HEAD /artifact/<id>/attachments/<attachment-id>?expires=...&signature=...` | Attachment-scoped signed URL | Serve attachment bytes, with video range support |
 | `GET /artifact/<24-char-id>` | Signed URL or Basic Auth | Render the latest artifact version |
 | `GET /artifact/<id>/versions/<n>` | Signed URL or Basic Auth | Render one immutable version snapshot |
 | `GET /artifact` | Public | Non-indexed module landing page |
@@ -48,11 +50,28 @@ Successful deletion uses a signed, short-lived, HTTP-only flash cookie. The gall
 
 ## Artifact tools
 
-- `publish_html(html, title?)` — publishes HTML and returns one-week signed latest/version URLs plus SHA-256 metadata.
-- `update_artifact(artifact_id, html, title?)` — creates a new version while preserving artifact identity and returns fresh signed URLs.
+- `publish_html(html, title?, tags?)` — publishes HTML and returns one-week signed latest/version URLs plus SHA-256 metadata.
+- `update_artifact(artifact_id, html, title?, tags?)` — creates a new version while preserving artifact identity and returns fresh signed URLs.
 - `get_signed_url(artifact_id, expires_in_seconds?, version?)` — creates a fresh expiring share URL; defaults to one week.
-- `list_artifacts(limit?)` — lists recent private metadata; HTML source is omitted.
-- `delete_artifact(artifact_id)` — permanently removes one artifact.
+- `get_attachment_upload_url(artifact_id)` returns the authenticated streaming upload endpoint, byte limit, and existing attachment references.
+- `list_artifacts(limit?, tag?)` returns recent private metadata filtered before limiting, plus all unique tags across the entire collection.
+- `delete_artifact(artifact_id)` permanently removes one artifact, every version, and its attachments.
+
+## Artifact attachments and tags
+
+See [the public upload and tagging guide](public/README.md#attachment-uploads) for the client workflow and exact semantics. Publish an initial page, get its upload endpoint with `get_attachment_upload_url`, stream raw binary using its 600-second artifact-scoped capability URL without exposing the shared Bearer credential, and place the returned `artifact-attachment:ID` reference in a follow-up HTML version. The response lists existing uploads so clients can recover references without re-uploading.
+
+Attachments are immutable, artifact-owned files under `data/artifact/attachments/<artifact-id>/`. Every read checks an attachment-specific HMAC and expiry, then checks that its parent artifact still exists. Signed-page assets inherit that page's expiry; owner Basic Auth views receive one-hour assets. Asset signatures cannot authorize HTML pages or other files. No directory is exposed by a static file server. Non-allowlisted MIME types are forced downloads; all asset responses include `nosniff` and sandbox headers. HEAD and ranges support videos without reading entire files into memory. Pages with substituted references and binary responses use `private, no-store` instead of immutable caching. Metadata hashes continue to identify the stored source.
+
+Defaults are 256 MiB per file and 100 files per artifact, controlled by `ARTIFACT_MAX_ATTACHMENT_BYTES` and `ARTIFACT_MAX_ATTACHMENTS`. HTML has its own independent limit. Streaming writes count actual bytes, use private temporary files, and remove partial files on handled failure. Upload, update, and deletion share a per-artifact lock. Run one Node writer for a data directory. Deletion removes attachment bytes and all HTML versions. Uploaded but unreferenced files remain until artifact deletion.
+
+Tags are normalized private metadata. Publish defaults to `[]`; updates preserve omitted tags and clear on `[]`. Listing filters before limiting and returns the sorted unique tags from the entire current collection. The private gallery displays accessible filter chips, clear, and no-results states. Historical untagged metadata requires no migration.
+
+### Reverse-proxy requirements for attachments
+
+Before enabling this release publicly, route `POST /artifact/<id>/attachments` and `GET/HEAD /artifact/<id>/attachments/<attachment-id>` to Node without a separate Basic Auth challenge. Node enforces expiring artifact-scoped capabilities or optional Bearer authentication on uploads and file-scoped signatures on reads. Match only the two attachment route shapes; do not broaden a public matcher to the entire artifact namespace. Keep `/artifacts` and owner page fallbacks behind existing Basic Auth. Strip client-provided `X-Artifact-Basic-Auth` and `X-Questionnaire-Basic-Auth` in the public fallback proxy; inject trusted markers only after Basic Auth in private branches, as for existing artifact routes. Never serve the attachment storage directory directly or cache signed asset responses.
+
+The proxy must preserve the query string, Authorization, Content-Type, Range, and If-Range headers, and permit a streaming body up to the configured attachment limit. Align proxy body-size limits and request timeouts with the expected video size. Review these live proxy settings during deployment; no proxy configuration is stored or changed by this repository patch.
 
 ## Questionnaire tools
 

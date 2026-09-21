@@ -2,6 +2,7 @@ import express from "express";
 import { readFile } from "node:fs/promises";
 import { hostHeaderValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { mountAttachmentRoutes } from "./artifact/attachments.js";
 import { ArtifactStore } from "./artifact/store.js";
 import { createArtifactMcpServer } from "./artifact/mcp.js";
 import { QuestionnaireStore } from "./questionnaire/store.js";
@@ -78,7 +79,7 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function renderArtifactGallery(artifacts, deletedArtifactId = "") {
+function renderArtifactGallery(artifacts, deletedArtifactId = "", tags = [], selectedTag) {
   const cards = artifacts.map((artifact) => {
     const id = escapeHtml(artifact.artifact_id);
     const title = escapeHtml(artifact.title || "Untitled artifact");
@@ -125,7 +126,8 @@ function renderArtifactGallery(artifacts, deletedArtifactId = "") {
     </article>`;
   }).join("\n");
 
-  const content = cards || `<section class="empty"><h2>No artifacts yet</h2><p>Published HTML will appear here.</p></section>`;
+  const filters = `<nav class="tag-filters" aria-label="Filter by tag"><a href="/artifacts">Clear filter</a>${tags.map(tag => `<a href="/artifacts?tag=${encodeURIComponent(tag)}" aria-current="${tag === selectedTag ? "true" : "false"}">${escapeHtml(tag)}</a>`).join("")}</nav>`;
+  const content = cards || `<section class="empty"><h2>${selectedTag ? "No artifacts match this tag" : "No artifacts yet"}</h2><p>${selectedTag ? "Choose another tag or clear the filter." : "Published HTML will appear here."}</p></section>`;
   const notice = deletedArtifactId
     ? `<div class="notice" role="status">Deleted artifact <code>${escapeHtml(deletedArtifactId)}</code>.</div>`
     : "";
@@ -134,9 +136,10 @@ function renderArtifactGallery(artifacts, deletedArtifactId = "") {
 <title>Artifact Gallery</title>
 <style>
 :root{color-scheme:dark;--bg:#090b10;--panel:#11141b;--line:#272b36;--text:#f4f5f7;--muted:#949baa;--accent:#a8b4ff;--danger:#ff7777}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 ui-sans-serif,system-ui,sans-serif}header,main,.notice{width:min(1180px,calc(100% - 32px));margin-inline:auto}header{display:flex;justify-content:space-between;align-items:end;gap:24px;padding:64px 0 32px;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;gap:18px}.brand>img{border-radius:16px;box-shadow:0 12px 38px #0008}.eyebrow{margin:0 0 8px;color:var(--accent);font-size:12px;font-weight:750;letter-spacing:.16em;text-transform:uppercase}h1{margin:0;font-size:clamp(36px,7vw,72px);line-height:.95;letter-spacing:-.055em}header .count{color:var(--muted);white-space:nowrap}.notice{margin-top:24px;padding:12px 14px;border:1px solid #355a48;border-radius:10px;background:#13251d;color:#baf7d3}.notice code{color:inherit}.copy-status{position:fixed;z-index:20;left:50%;bottom:22px;max-width:min(520px,calc(100% - 32px));padding:11px 15px;border:1px solid #355a48;border-radius:10px;background:#13251df2;color:#baf7d3;box-shadow:0 14px 42px #000a;opacity:0;pointer-events:none;transform:translate(-50%,8px);transition:opacity .18s ease,transform .18s ease}.copy-status.visible{opacity:1;transform:translate(-50%,0)}.copy-status.error{border-color:#733842;background:#29171af2;color:#ffd0d4}main{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,310px),1fr));gap:20px;padding:28px 0 64px}.card{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:18px;background:var(--panel);transition:transform .18s ease,border-color .18s ease}.card:hover{transform:translateY(-3px);border-color:#454b5c}.share-button,.delete-button{position:absolute;z-index:4;top:12px;display:grid;place-items:center;width:38px;height:38px;padding:0;border:1px solid #ffffff24;border-radius:11px;background:#11141be8;color:#d5d9e2;box-shadow:0 8px 24px #0008;cursor:pointer;opacity:0;transform:translateY(-5px);transition:opacity .16s ease,transform .16s ease,background .16s ease,color .16s ease}.delete-button{right:12px}.share-button{right:58px}.card:hover .share-button,.card:focus-within .share-button,.share-button:focus-visible,.card:hover .delete-button,.card:focus-within .delete-button,.delete-button:focus-visible{opacity:1;transform:translateY(0)}.share-button:hover,.share-button:focus-visible{background:#27315e;color:#fff;outline:2px solid #9eabff;outline-offset:2px}.delete-button:hover,.delete-button:focus-visible{background:#6f2630;color:#fff;outline:2px solid #ff8a93;outline-offset:2px}.trash-icon{pointer-events:none}.preview{position:relative;display:block;aspect-ratio:16/10;overflow:hidden;background:#fff}.preview:after{content:"";position:absolute;inset:0}.preview iframe{width:160%;height:160%;border:0;transform:scale(.625);transform-origin:top left;pointer-events:none}.details{padding:18px}.details h2{margin:0 0 8px;font-size:18px;line-height:1.25;letter-spacing:-.02em}.details a{color:inherit;text-decoration:none}.details>p{margin:0 0 13px;color:var(--muted);font-size:13px}.details>code{display:block;overflow:hidden;color:#6f7685;font-size:11px;text-overflow:ellipsis}.version-control{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}.version-control summary{width:max-content;color:#a8adb8;font-size:13px;cursor:pointer}.version-control ol{margin:10px 0 0;padding-left:20px}.version-control li{margin:5px 0;color:var(--muted);font-size:12px}.version-control li a{color:var(--accent)}.delete-dialog{width:min(440px,calc(100% - 28px));padding:0;border:1px solid #3a3f4c;border-radius:18px;background:#12151c;color:var(--text);box-shadow:0 28px 100px #000d}.delete-dialog::backdrop{background:#05060aab;backdrop-filter:blur(6px)}.dialog-shell{display:grid;grid-template-columns:auto 1fr;gap:14px;padding:24px}.dialog-icon{display:grid;place-items:center;width:44px;height:44px;border:1px solid #743843;border-radius:12px;background:#2a171b;color:#ff8a93}.dialog-eyebrow{margin:0 0 3px;color:#ff8a93;font-size:11px;font-weight:750;letter-spacing:.13em;text-transform:uppercase}.dialog-shell h3{margin:0;font-size:19px;letter-spacing:-.02em}.dialog-shell>p{grid-column:1/-1;margin:4px 0;color:#b8bec9}.dialog-actions{grid-column:1/-1;display:flex;justify-content:flex-end;gap:9px;margin-top:5px}.dialog-actions button{border-radius:9px;padding:9px 13px;font:inherit;font-weight:700;cursor:pointer}.cancel-delete{border:1px solid var(--line);background:#1a1e27;color:#d8dce4}.confirm-delete{border:1px solid #9a4652;background:#7c2934;color:#fff}.cancel-delete:hover{background:#232833}.confirm-delete:hover{background:#963440}.empty{grid-column:1/-1;padding:80px 24px;text-align:center;border:1px dashed var(--line);border-radius:18px}.empty h2{margin:0 0 8px}.empty p{margin:0;color:var(--muted)}@media(max-width:560px){header{align-items:start;flex-direction:column;padding-top:40px}}@media(hover:none){.share-button,.delete-button{opacity:1;transform:none}}@media(prefers-reduced-motion:reduce){.card{transition:none}.card:hover{transform:none}.share-button,.delete-button{transition:none}}
+.tag-filters{display:flex;flex-wrap:wrap;gap:8px;width:min(1180px,calc(100% - 32px));margin:20px auto 0}.tag-filters a{border:1px solid var(--line);border-radius:999px;padding:6px 12px;color:var(--text);text-decoration:none}.tag-filters a[aria-current="true"]{background:var(--accent);color:var(--bg)}.tag-filters a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 </style></head><body>
 <header><div class="brand"><img src="/logo.svg" alt="" width="62" height="62"><div><p class="eyebrow">Private index</p><h1>Artifacts</h1></div></div><div class="count">${artifacts.length} ${artifacts.length === 1 ? "artifact" : "artifacts"}</div></header>
-${notice}<div id="copy-status" class="copy-status" role="status" aria-live="polite"></div><main>${content}</main>
+${filters}${notice}<div id="copy-status" class="copy-status" role="status" aria-live="polite"></div><main>${content}</main>
 <script>
 const copyStatus = document.getElementById("copy-status");
 for (const button of document.querySelectorAll("[data-sign-artifact]")) {
@@ -220,6 +223,7 @@ export async function createApp(config) {
     response.type("image/svg+xml").send(PUBLIC_QUESTIONNAIRE_MARK);
   });
 
+  mountAttachmentRoutes(app, store.attachments);
   mountQuestionnaireRoutes(app, questionnaireStore, questionnaireStore.config);
   mountQuestionnaireAdminRoutes(app, questionnaireStore, questionnaireStore.config);
 
@@ -239,7 +243,8 @@ export async function createApp(config) {
 
   app.get(["/artifacts", "/artifacts/"], async (request, response, next) => {
     try {
-      const listedArtifacts = await store.list(config.maxListItems);
+      const selectedTag = request.query.tag === undefined ? undefined : store.normalizeTags([request.query.tag])[0];
+      const { artifacts: listedArtifacts, tags } = await store.listWithTags(config.maxListItems, selectedTag);
       const artifacts = await Promise.all(listedArtifacts.map(async (artifact) => {
         const versions = await store.listVersions(artifact.artifact_id);
         return {
@@ -258,7 +263,7 @@ export async function createApp(config) {
       if (flashValue) response.append("Set-Cookie", galleryFlashCookie("", 0));
       response.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
       response.set("Cache-Control", "private, no-store");
-      response.type("html").send(renderArtifactGallery(artifacts, deletedArtifactId));
+      response.type("html").send(renderArtifactGallery(artifacts, deletedArtifactId, tags, selectedTag));
     } catch (error) {
       next(error);
     }
@@ -330,6 +335,13 @@ export async function createApp(config) {
       response.set("Cache-Control", "public, max-age=31536000, immutable");
       response.set("ETag", etag);
       response.type("html");
+      const rendered = await store.attachments.render(artifactId, html, request.get("x-artifact-basic-auth") === "1" ? String(Math.floor(Date.now() / 1000) + 3600) : request.query.expires);
+      if (rendered !== html) {
+        response.set("Cache-Control", "private, no-store");
+        response.removeHeader("ETag");
+        response.set("Content-Length", String(rendered.length));
+        return response.end(rendered);
+      }
       if (request.get("if-none-match") === etag) return response.status(304).end();
       return response.send(html);
     } catch (error) {
@@ -390,6 +402,13 @@ export async function createApp(config) {
       response.set("Cache-Control", "public, max-age=60, must-revalidate");
       response.set("ETag", etag);
       response.type("html");
+      const rendered = await store.attachments.render(artifactId, html, request.get("x-artifact-basic-auth") === "1" ? String(Math.floor(Date.now() / 1000) + 3600) : request.query.expires);
+      if (rendered !== html) {
+        response.set("Cache-Control", "private, no-store");
+        response.removeHeader("ETag");
+        response.set("Content-Length", String(rendered.length));
+        return response.end(rendered);
+      }
       if (request.get("if-none-match") === etag) return response.status(304).end();
       return response.send(html);
     } catch (error) {
