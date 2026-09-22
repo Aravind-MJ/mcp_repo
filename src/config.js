@@ -21,6 +21,8 @@ export function loadConfig(env = process.env) {
     port: positiveInteger(env.MCP_HUB_PORT, 4330, "MCP_HUB_PORT"),
     dataDir: env.MCP_HUB_DATA_DIR || path.join(runtimeDir, "data"),
     secretFile: env.MCP_SHARED_SECRET_FILE || path.join(runtimeDir, "secrets", "shared-secret"),
+    openRouterApiKeyFile: env.OPENROUTER_API_KEY_FILE || path.join(runtimeDir, "secrets", "openrouter-api-key"),
+    jevTimeoutMs: positiveInteger(env.JEV_OPENROUTER_TIMEOUT_MS, 30_000, "JEV_OPENROUTER_TIMEOUT_MS"),
     publicBaseUrl,
     maxHtmlBytes: positiveInteger(env.ARTIFACT_MAX_HTML_BYTES, 2 * 1024 * 1024, "ARTIFACT_MAX_HTML_BYTES"),
     maxAttachmentBytes: positiveInteger(env.ARTIFACT_MAX_ATTACHMENT_BYTES, 256 * 1024 * 1024, "ARTIFACT_MAX_ATTACHMENT_BYTES"),

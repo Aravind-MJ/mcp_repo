@@ -9,8 +9,10 @@ import { QuestionnaireStore } from "./questionnaire/store.js";
 import { createQuestionnaireMcpServer } from "./questionnaire/mcp.js";
 import { mountQuestionnaireRoutes } from "./questionnaire/routes.js";
 import { mountQuestionnaireAdminRoutes } from "./questionnaire/admin.js";
+import { JevClient, openRouterApiKeyAvailable } from "./jev/client.js";
+import { createJevMcpServer } from "./jev/mcp.js";
 import { LANDING_HTML } from "./landing.js";
-import { ARTIFACT_LANDING_HTML } from "./module-landings.js";
+import { ARTIFACT_LANDING_HTML, JEV_LANDING_HTML } from "./module-landings.js";
 import { ServiceError } from "./errors.js";
 import { artifactSignedUrlIsValid, createGalleryFlash, galleryCsrfIsValid, galleryCsrfToken, readGalleryFlash, readSharedSecret, sharedSecretAuth } from "./security.js";
 
@@ -20,6 +22,9 @@ const PUBLIC_LOGO = await readFile(new URL("../public/logo.svg", import.meta.url
 const PUBLIC_FAVICON = await readFile(new URL("../public/favicon.svg", import.meta.url), "utf8");
 const PUBLIC_HUB_MARK = await readFile(new URL("../public/hub.svg", import.meta.url), "utf8");
 const PUBLIC_QUESTIONNAIRE_MARK = await readFile(new URL("../public/questionnaire.svg", import.meta.url), "utf8");
+const PUBLIC_JEV_MARK = await readFile(new URL("../public/jev.svg", import.meta.url), "utf8");
+const PUBLIC_JEV_INSTALL_README = await readFile(new URL("../public/jev-README.md", import.meta.url), "utf8");
+const PUBLIC_JEV_SKILL = await readFile(new URL("../public/jev-SKILL.md", import.meta.url), "utf8");
 const GALLERY_FLASH_COOKIE = "artifact_gallery_flash";
 
 function cookieValue(request, name) {
@@ -185,6 +190,10 @@ for (const dialog of document.querySelectorAll(".delete-dialog")) {
 export async function createApp(config) {
   const store = new ArtifactStore(config);
   const questionnaireStore = new QuestionnaireStore(config);
+  const jevClient = new JevClient({
+    apiKeyFile: config.openRouterApiKeyFile,
+    timeoutMs: config.jevTimeoutMs,
+  });
   await store.initialize();
   await questionnaireStore.initialize();
   await readSharedSecret(config.secretFile);
@@ -193,10 +202,12 @@ export async function createApp(config) {
   app.use(hostHeaderValidation(config.allowedHosts));
   app.disable("x-powered-by");
 
-  app.get("/healthz", (request, response) => {
+  app.get("/healthz", async (request, response) => {
     securityHeaders(response);
     response.set("Cache-Control", "no-store");
-    response.json({ status: "ok", modules: ["artifact", "questionnaire"] });
+    const modules = ["artifact", "questionnaire"];
+    if (await openRouterApiKeyAvailable(config.openRouterApiKeyFile)) modules.push("jev");
+    response.json({ status: "ok", modules });
   });
 
   app.get("/logo.svg", (request, response) => {
@@ -223,6 +234,12 @@ export async function createApp(config) {
     response.type("image/svg+xml").send(PUBLIC_QUESTIONNAIRE_MARK);
   });
 
+  app.get("/jev.svg", (request, response) => {
+    securityHeaders(response);
+    response.set("Cache-Control", "public, max-age=86400");
+    response.type("image/svg+xml").send(PUBLIC_JEV_MARK);
+  });
+
   mountAttachmentRoutes(app, store.attachments);
   mountQuestionnaireRoutes(app, questionnaireStore, questionnaireStore.config);
   mountQuestionnaireAdminRoutes(app, questionnaireStore, questionnaireStore.config);
@@ -239,6 +256,13 @@ export async function createApp(config) {
     response.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     response.set("Cache-Control", "public, max-age=300");
     response.type("html").send(ARTIFACT_LANDING_HTML);
+  });
+
+  app.get(["/jev", "/jev/"], (request, response) => {
+    securityHeaders(response);
+    response.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    response.set("Cache-Control", "public, max-age=300");
+    response.type("html").send(JEV_LANDING_HTML);
   });
 
   app.get(["/artifacts", "/artifacts/"], async (request, response, next) => {
@@ -319,6 +343,18 @@ export async function createApp(config) {
     response.type("text/markdown; charset=utf-8").send(PUBLIC_SKILL);
   });
 
+  app.get(["/jev/README.md", "/jev/install.md"], (request, response) => {
+    securityHeaders(response);
+    response.set("Cache-Control", "public, max-age=300");
+    response.type("text/markdown; charset=utf-8").send(PUBLIC_JEV_INSTALL_README);
+  });
+
+  app.get("/jev/SKILL.md", (request, response) => {
+    securityHeaders(response);
+    response.set("Cache-Control", "public, max-age=300");
+    response.type("text/markdown; charset=utf-8").send(PUBLIC_JEV_SKILL);
+  });
+
   app.get("/artifact/:artifactId/versions/:version", async (request, response, next) => {
     try {
       const artifactId = store.validateId(request.params.artifactId);
@@ -386,6 +422,25 @@ export async function createApp(config) {
     }
   });
   app.all("/questionnaire/mcp", (request, response) => jsonRpcMethodNotAllowed(response));
+
+  app.use("/jev/mcp", sharedSecretAuth(config.secretFile));
+  app.post("/jev/mcp", express.json({ limit: "2mb", strict: true }), async (request, response, next) => {
+    const server = createJevMcpServer(jevClient);
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    response.on("close", () => {
+      void transport.close();
+      void server.close();
+    });
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(request, response, request.body);
+    } catch (error) {
+      await transport.close().catch(() => {});
+      await server.close().catch(() => {});
+      next(error);
+    }
+  });
+  app.all("/jev/mcp", (request, response) => jsonRpcMethodNotAllowed(response));
 
   app.get("/artifact/:artifactId", async (request, response, next) => {
     try {

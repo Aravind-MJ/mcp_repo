@@ -20,6 +20,7 @@ export const LANDING_HTML = `<!doctype html>
       --line: #32343b;
       --artifact: #aeb9ff;
       --questionnaire: #9ed8b1;
+      --jev: #e7a8ff;
       --shell: 76rem;
     }
 
@@ -139,6 +140,7 @@ export const LANDING_HTML = `<!doctype html>
     }
 
     .module--questionnaire { --accent: var(--questionnaire); }
+    .module--jev { --accent: var(--jev); }
 
     .module-index {
       margin: .35rem 0 0;
@@ -309,7 +311,7 @@ export const LANDING_HTML = `<!doctype html>
         <img src="/hub.svg" width="44" height="44" alt="">
         <span class="identity-copy"><strong>Aravind M J</strong><span>Personal MCP Hub</span></span>
       </a>
-      <p class="registry-count">02 MCP services</p>
+      <p class="registry-count">03 MCP services</p>
     </header>
 
     <main id="main-content">
@@ -318,7 +320,7 @@ export const LANDING_HTML = `<!doctype html>
           <p class="eyebrow">Personal infrastructure · Purpose-built interfaces</p>
           <h1 id="page-title">Small tools, built to be used.</h1>
         </div>
-        <p class="hero-intro">Two purpose-built MCP services. Each has a dedicated endpoint, a harness-neutral installation guide, and a companion skill for agents.</p>
+        <p class="hero-intro">Three purpose-built MCP services. Each has a dedicated endpoint, a harness-neutral installation guide, and a companion skill for agents.</p>
       </section>
 
       <section class="registry" id="mcp-registry" aria-label="Available MCP services">
@@ -327,7 +329,7 @@ export const LANDING_HTML = `<!doctype html>
           <div class="module-copy">
             <div class="module-meta">
               <span class="access">Bearer protected</span>
-              <span class="tool-count">5 tools</span>
+              <span class="tool-count">6 tools</span>
             </div>
             <h2 id="artifact-title">HTML Artifact Publisher</h2>
             <p class="module-description">Publish, version, and share self-contained HTML through opaque, expiring signed links.</p>
@@ -367,6 +369,31 @@ export const LANDING_HTML = `<!doctype html>
                 <li><a href="/questionnaire">Overview</a></li>
                 <li><a href="/questionnaire/README.md">Install guide</a></li>
                 <li><a href="/questionnaire/SKILL.md">Companion skill</a></li>
+              </ul>
+            </nav>
+          </div>
+        </article>
+
+        <article class="module module--jev" data-mcp-entry="jev" aria-labelledby="jev-title">
+          <p class="module-index" aria-hidden="true">03</p>
+          <div class="module-copy">
+            <div class="module-meta">
+              <span class="access">Bearer protected</span>
+              <span class="tool-count">1 tool</span>
+            </div>
+            <h2 id="jev-title">Jev Structured Decisions</h2>
+            <p class="module-description">Make bounded semantic choices, scores, and yes/no probability judgments through OpenRouter.</p>
+          </div>
+          <div class="module-technical">
+            <div>
+              <span class="endpoint-label">Streamable HTTP endpoint</span>
+              <div class="endpoint"><span class="method">POST</span><code>/jev/mcp</code></div>
+            </div>
+            <nav aria-label="Jev Structured Decisions resources">
+              <ul class="module-links">
+                <li><a href="/jev">Overview</a></li>
+                <li><a href="/jev/README.md">Install guide</a></li>
+                <li><a href="/jev/SKILL.md">Companion skill</a></li>
               </ul>
             </nav>
           </div>

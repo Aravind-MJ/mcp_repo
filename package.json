@@ -2,7 +2,7 @@
   "name": "personal-mcp-hub",
   "version": "1.0.0",
   "private": true,
-  "description": "Personal MCP hub with shareable HTML artifacts and identified questionnaire submissions",
+  "description": "Personal MCP hub for HTML artifacts, questionnaires, and Jev structured decisions",
   "type": "module",
   "engines": {
     "node": ">=22"

@@ -6,13 +6,14 @@ const entryPattern = /<article\b[^>]*data-mcp-entry="([^"]+)"[\s\S]*?<\/article>
 
 test("landing page has one complete entry for each MCP", () => {
   const entries = [...LANDING_HTML.matchAll(entryPattern)];
-  assert.deepEqual(entries.map((match) => match[1]), ["artifact", "questionnaire"]);
-  assert.equal(entries.length, 2);
+  assert.deepEqual(entries.map((match) => match[1]), ["artifact", "questionnaire", "jev"]);
+  assert.equal(entries.length, 3);
 
-  const [artifact, questionnaire] = entries.map((match) => match[0]);
+  const [artifact, questionnaire, jev] = entries.map((match) => match[0]);
   for (const [entry, expectations] of [
-    [artifact, ["HTML Artifact Publisher", "Bearer protected", "5 tools", "/artifact/mcp", "/artifact", "/artifact/README.md", "/artifact/SKILL.md"]],
+    [artifact, ["HTML Artifact Publisher", "Bearer protected", "6 tools", "/artifact/mcp", "/artifact", "/artifact/README.md", "/artifact/SKILL.md"]],
     [questionnaire, ["Questionnaire Collector", "Bearer protected", "11 tools", "/questionnaire/mcp", "/questionnaire", "/questionnaire/README.md", "/questionnaire/SKILL.md"]],
+    [jev, ["Jev Structured Decisions", "Bearer protected", "1 tool", "/jev/mcp", "/jev", "/jev/README.md", "/jev/SKILL.md"]],
   ]) {
     for (const expected of expectations) assert.ok(entry.includes(expected), `entry includes ${expected}`);
     assert.equal((entry.match(/<h2\b/g) || []).length, 1);
@@ -25,7 +26,7 @@ test("landing page is self-contained, semantic, and responsive", () => {
   assert.match(LANDING_HTML, /^<!doctype html>/i);
   assert.equal((LANDING_HTML.match(/<h1\b/g) || []).length, 1);
   assert.equal((LANDING_HTML.match(/<main\b/g) || []).length, 1);
-  assert.equal((LANDING_HTML.match(/<article\b/g) || []).length, 2);
+  assert.equal((LANDING_HTML.match(/<article\b/g) || []).length, 3);
   assert.match(LANDING_HTML, /<meta name="viewport" content="width=device-width,initial-scale=1">/);
   assert.match(LANDING_HTML, /<link rel="icon" href="\/hub\.svg" type="image\/svg\+xml">/);
   assert.match(LANDING_HTML, /<img src="\/hub\.svg"[^>]+alt="">/);
@@ -43,10 +44,12 @@ test("landing links resolve to declared local resources", () => {
   assert.deepEqual(hrefs.filter((href) => href.endsWith("README.md")), [
     "/artifact/README.md",
     "/questionnaire/README.md",
+    "/jev/README.md",
   ]);
   assert.deepEqual(hrefs.filter((href) => href.endsWith("SKILL.md")), [
     "/artifact/SKILL.md",
     "/questionnaire/SKILL.md",
+    "/jev/SKILL.md",
   ]);
   assert.equal(new Set(hrefs).size, hrefs.length);
 });

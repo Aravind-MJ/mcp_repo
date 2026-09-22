@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ARTIFACT_LANDING_HTML, QUESTIONNAIRE_LANDING_HTML } from "../src/module-landings.js";
+import { ARTIFACT_LANDING_HTML, JEV_LANDING_HTML, QUESTIONNAIRE_LANDING_HTML } from "../src/module-landings.js";
 
 const pages = [
   {
@@ -29,6 +29,19 @@ const pages = [
     toolCount: 11,
     authCopy: "Bearer authentication required",
   },
+  {
+    name: "jev",
+    html: JEV_LANDING_HTML,
+    title: "Jev Structured Decisions",
+    favicon: "/jev.svg",
+    mark: "/jev.svg",
+    endpoint: "/jev/mcp",
+    guide: "/jev/README.md",
+    skill: "/jev/SKILL.md",
+    serverName: "aravind_jev_decisions",
+    toolCount: 1,
+    authCopy: "Bearer authentication required",
+  },
 ];
 
 for (const page of pages) {
@@ -42,7 +55,7 @@ for (const page of pages) {
     assert.ok(page.html.includes(page.endpoint));
     assert.ok(page.html.includes(page.serverName));
     assert.equal((page.html.match(/<li class="tool">/g) || []).length, page.toolCount);
-    assert.match(page.html, new RegExp(`>${page.toolCount} tools<`));
+    assert.match(page.html, new RegExp(`>${page.toolCount} tool${page.toolCount === 1 ? "" : "s"}<`));
     assert.match(page.html, /<meta name="viewport" content="width=device-width,initial-scale=1">/);
     assert.match(page.html, /class="skip-link" href="#main-content"/);
     assert.match(page.html, /@media \(max-width: 38rem\)/);
@@ -97,8 +110,10 @@ test("questionnaire tools are grouped by lifecycle", () => {
 
 const artifactTools = ["get_attachment_upload_url", "publish_html", "update_artifact", "get_signed_url", "list_artifacts", "delete_artifact"];
 const questionnaireTools = ["create_questionnaire", "update_questionnaire", "get_questionnaire", "list_questionnaires", "get_questionnaire_signed_url", "submit_questionnaire_response", "set_questionnaire_status", "delete_questionnaire", "list_questionnaire_responses", "get_questionnaire_response", "delete_questionnaire_response"];
+const jevTools = ["make_decisions"];
 
 test("module landing tool registries match the exact MCP tools", () => {
   for (const tool of artifactTools) assert.match(ARTIFACT_LANDING_HTML, new RegExp(`<code>${tool}<\\/code>`));
   for (const tool of questionnaireTools) assert.match(QUESTIONNAIRE_LANDING_HTML, new RegExp(`<code>${tool}<\\/code>`));
+  for (const tool of jevTools) assert.match(JEV_LANDING_HTML, new RegExp(`<code>${tool}<\\/code>`));
 });

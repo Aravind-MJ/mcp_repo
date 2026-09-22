@@ -1,6 +1,6 @@
 # Personal MCP Hub
 
-A Node.js personal MCP service hosting multiple MCP modules under one domain. It currently provides authenticated HTML artifacts and credential-free questionnaire management with signed public answer links.
+A Node.js personal MCP service hosting multiple MCP modules under one domain. It provides authenticated HTML artifacts, questionnaire management with signed public answer links, and authenticated Jev structured decisions through OpenRouter.
 
 ## Route layout
 
@@ -24,6 +24,10 @@ A Node.js personal MCP service hosting multiple MCP modules under one domain. It
 | `GET /questionnaire` | Public | Non-indexed module landing page |
 | `GET /questionnaire/README.md` | Public | Secret-free installation and schema guide |
 | `GET /questionnaire/SKILL.md` | Public | Companion agent skill |
+| `POST /jev/mcp` | Shared bearer secret | Jev typed decisions through OpenRouter |
+| `GET /jev` | Public | Non-indexed module landing page |
+| `GET /jev/README.md` | Public | Secret-free installation and schema guide |
+| `GET /jev/SKILL.md` | Public | Companion agent skill |
 | `GET /questionnaires` | Caddy Basic Auth | Private questionnaire index with links, status, and response counts |
 | `GET /questionnaires/<id>/responses[/<response-id>]` | Caddy Basic Auth | Inspect collected response metadata and answers |
 | `POST /questionnaires/<id>/{sign,status,delete}` | Caddy Basic Auth + action-scoped CSRF token | Mint links, open/close, or permanently delete from the index |
@@ -39,6 +43,8 @@ Public installation URLs:
 - `https://mcp.aravindmj.in/artifact/SKILL.md`
 - `https://mcp.aravindmj.in/questionnaire/README.md`
 - `https://mcp.aravindmj.in/questionnaire/SKILL.md`
+- `https://mcp.aravindmj.in/jev/README.md`
+- `https://mcp.aravindmj.in/jev/SKILL.md`
 
 Use the local MCP name `aravind_html_publisher` in other harnesses. The companion skill distinguishes this externally hosted publisher from Claude's built-in Artifacts feature: public/shareable-link requests use this MCP; Claude-native in-chat canvas requests use the built-in feature.
 
@@ -87,10 +93,16 @@ The proxy must preserve the query string, Authorization, Content-Type, Range, an
 
 Supported types: short/long text, email, URL, phone, number, date, time, date-time, single/multiple choice, dropdown, yes/no, consent, rating, scale, ranking, and matrix. The answering UI is responsive, keyboard accessible, progress-aware, dark-mode aware, and autosaves incomplete anonymous drafts before strict final validation and respondent attribution.
 
+## Jev tool
+
+- `make_decisions` — evaluates one text or structured state against independent `noul`, `choice`, and `score` questions in parallel through OpenRouter's Decisions API. It defaults to pinned `typesafe/jev-1.13`; `~typesafe/jev-latest` is available only for deliberate model drift.
+
+The upstream OpenRouter key is read from `secrets/openrouter-api-key` inside the runtime directory on every call, so rotation takes effect without embedding it in source or client configuration. Use `scripts/setup-jev-openrouter.sh` to verify, install, or rotate it with hidden input, mode `0600`, and health verification; the running service picks it up without a restart.
+
 ## Security model
 
 - Node binds only to `127.0.0.1:4330`; Caddy is the only public ingress.
-- Artifact MCP calls require the common bearer secret. Questionnaire MCP calls intentionally require no authentication.
+- Artifact, Questionnaire, and Jev MCP calls require the common bearer secret. The separate OpenRouter key used by Jev never leaves the server.
 - The shared secret is stored outside the repository at `/data/mcp-hub/secrets/shared-secret`, mode `0600`; its directory is `0700`.
 - The secret is read on every MCP request, allowing atomic rotation without restarting Node.
 - Secret comparison uses Node's constant-time `crypto.timingSafeEqual`.
@@ -129,6 +141,7 @@ MCP_HUB_RUNTIME_DIR=/data/mcp-hub node /data/mcp-hub/app/scripts/rotate-secret.j
 curl -fsS http://127.0.0.1:4330/healthz
 hermes mcp test aravind_html_publisher
 hermes mcp test aravind_questionnaires
+hermes mcp test aravind_jev_decisions
 ```
 
 The questionnaire SQLite database is persistent runtime state, not release content. Back up `/data/mcp-hub/data/questionnaire/questionnaires.sqlite3` with SQLite's online backup mechanism while the service is running, or stop the service and copy the database together with any `-wal` and `-shm` sidecars. Never replace `/data/mcp-hub/data` during an application deployment.
