@@ -175,6 +175,18 @@ test("asset signatures expire with their page and cannot transfer to other files
   assert.equal((await fetch(media.url)).status, 404);
 });
 
+test("gallery hides tag filters when the collection has no tags unless a filter is active", async () => {
+  await call("publish_html", { html: "untagged", title: "Untagged item" });
+  const gallery = await (await fetch(`${baseUrl}/artifacts`)).text();
+  assert.match(gallery, /Untagged item/);
+  assert.doesNotMatch(gallery, /aria-label="Filter by tag"/);
+  assert.doesNotMatch(gallery, /Clear filter/);
+
+  const filteredGallery = await (await fetch(`${baseUrl}/artifacts?tag=missing`)).text();
+  assert.match(filteredGallery, /No artifacts match this tag/);
+  assert.match(filteredGallery, /href="\/artifacts">Clear filter/);
+});
+
 test("tag filters apply before limits and gallery chips include the entire collection", async () => {
   const old = await call("publish_html", { html: "old", title: "Older item", tags: ["Rare", "<tag>"] });
   await call("publish_html", { html: "new", title: "Newer item", tags: ["common"] });

@@ -131,7 +131,9 @@ function renderArtifactGallery(artifacts, deletedArtifactId = "", tags = [], sel
     </article>`;
   }).join("\n");
 
-  const filters = `<nav class="tag-filters" aria-label="Filter by tag"><a href="/artifacts">Clear filter</a>${tags.map(tag => `<a href="/artifacts?tag=${encodeURIComponent(tag)}" aria-current="${tag === selectedTag ? "true" : "false"}">${escapeHtml(tag)}</a>`).join("")}</nav>`;
+  const filters = tags.length || selectedTag
+    ? `<nav class="tag-filters" aria-label="Filter by tag"><a href="/artifacts">Clear filter</a>${tags.map(tag => `<a href="/artifacts?tag=${encodeURIComponent(tag)}" aria-current="${tag === selectedTag ? "true" : "false"}">${escapeHtml(tag)}</a>`).join("")}</nav>`
+    : "";
   const content = cards || `<section class="empty"><h2>${selectedTag ? "No artifacts match this tag" : "No artifacts yet"}</h2><p>${selectedTag ? "Choose another tag or clear the filter." : "Published HTML will appear here."}</p></section>`;
   const notice = deletedArtifactId
     ? `<div class="notice" role="status">Deleted artifact <code>${escapeHtml(deletedArtifactId)}</code>.</div>`
