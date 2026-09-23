@@ -28,6 +28,7 @@ A Node.js personal MCP service hosting multiple MCP modules under one domain. It
 | `GET /jev` | Public | Non-indexed module landing page |
 | `GET /jev/README.md` | Public | Secret-free installation and schema guide |
 | `GET /jev/SKILL.md` | Public | Companion agent skill |
+| `GET /jev/logs` | Caddy Basic Auth | Private Jev call log with arguments, results, failures, and costs |
 | `GET /questionnaires` | Caddy Basic Auth | Private questionnaire index with links, status, and response counts |
 | `GET /questionnaires/<id>/responses[/<response-id>]` | Caddy Basic Auth | Inspect collected response metadata and answers |
 | `POST /questionnaires/<id>/{sign,status,delete}` | Caddy Basic Auth + action-scoped CSRF token | Mint links, open/close, or permanently delete from the index |
@@ -99,10 +100,36 @@ Supported types: short/long text, email, URL, phone, number, date, time, date-ti
 
 The upstream OpenRouter key is read from `secrets/openrouter-api-key` inside the runtime directory on every call, so rotation takes effect without embedding it in source or client configuration. Use `scripts/setup-jev-openrouter.sh` to verify, install, or rotate it with hidden input, mode `0600`, and health verification; the running service picks it up without a restart.
 
+### Jev call log
+
+Node writes an audit record for every authenticated `tools/call` that reaches `POST /jev/mcp` before it makes any OpenRouter request. That includes unknown tool names, calls rejected by input validation, calls the MCP transport rejects, and each `tools/call` item in a JSON-RPC batch. It does not record `initialize`, `tools/list`, other protocol messages, or requests that fail bearer authentication.
+
+Each record holds:
+
+- an opaque call ID, and the JSON-RPC ID when it is a safe integer or a string of at most 256 characters;
+- the tool name and the MCP arguments as JSON, exactly as the server parsed them;
+- UTC start and completion times and the duration;
+- `success` or `failure`, the full structured result of a successful call, and a failure message capped at 1,000 characters;
+- the requested model, served model, provider, and OpenRouter generation ID;
+- input, output, and total token counts, and OpenRouter `usage.cost` as `cost_usd`, when OpenRouter reports them.
+
+Records never contain request headers, bearer tokens, API keys, secret files, error causes, or upstream error bodies.
+
+A call counts as successful only after OpenRouter returns a response that passes the client checks and the tool's output schema. HTTP errors, network errors, timeouts, invalid responses, unknown tools, and schema rejections are failures. The cost is OpenRouter's `usage.cost` in USD, and the page shows it digit for digit, so `1.2e-8` appears as `$0.000000012`. A missing, negative, or non-numeric cost shows as "Cost unavailable", never as `$0`. A failed call has a cost only when OpenRouter returned a parseable response with valid usage data. Totals add costs as decimals, so they carry no floating-point residue.
+
+If the record cannot be written, the call returns a tool error and OpenRouter is not called. If the final write fails after OpenRouter answers, the caller still gets the result and the record stays pending. On startup, Node marks every pending record as a failure. The page flags a pending record older than the OpenRouter timeout plus 60 seconds as needing review. A JSON-RPC ID reused within one HTTP request makes responses unattributable, so Node records those calls as failures and does not run them.
+
+The private page is `https://mcp.aravindmj.in/jev/logs`. It shows total, successful, failed, and unfinished counts, the total cost, and pages of 25 calls, newest first. Each call has expandable request and result details. Failed calls carry a "Failed" badge with an icon, a highlighted card, and the failure reason. Node serves the page only when Caddy sets `X-Jev-Basic-Auth: 1` and returns 404 otherwise. The page uses a nonce-based CSP with no scripts, `no-store`, `noindex`, and frame denial, and it escapes all logged content. The public `/jev` landing page links to it, protected by the same HTTP Basic Auth as the page itself.
+
+### Reverse-proxy requirements for the Jev call log
+
+Update Caddy before deploying the Jev call log. Put `/jev/logs` and `/jev/logs/*` behind the existing Basic Auth, and inject `X-Jev-Basic-Auth: 1` only in that authenticated branch. Strip any client-provided `X-Jev-Basic-Auth` header in the public fallback proxy, as for the artifact and questionnaire markers. Until the public branch strips that header, anyone who can reach the host can send it and read every logged argument and result. No proxy configuration is stored or changed by this repository.
+
 ## Security model
 
 - Node binds only to `127.0.0.1:4330`; Caddy is the only public ingress.
 - Artifact, Questionnaire, and Jev MCP calls require the common bearer secret. The separate OpenRouter key used by Jev never leaves the server.
+- Jev call records are stored in `/data/mcp-hub/data/jev/audit.sqlite3` using WAL mode, full synchronization, and private filesystem permissions. They keep full arguments and results with no automatic retention limit.
 - The shared secret is stored outside the repository at `/data/mcp-hub/secrets/shared-secret`, mode `0600`; its directory is `0700`.
 - The secret is read on every MCP request, allowing atomic rotation without restarting Node.
 - Secret comparison uses Node's constant-time `crypto.timingSafeEqual`.
@@ -144,7 +171,7 @@ hermes mcp test aravind_questionnaires
 hermes mcp test aravind_jev_decisions
 ```
 
-The questionnaire SQLite database is persistent runtime state, not release content. Back up `/data/mcp-hub/data/questionnaire/questionnaires.sqlite3` with SQLite's online backup mechanism while the service is running, or stop the service and copy the database together with any `-wal` and `-shm` sidecars. Never replace `/data/mcp-hub/data` during an application deployment.
+The questionnaire SQLite database is persistent runtime state, not release content. Back up `/data/mcp-hub/data/questionnaire/questionnaires.sqlite3` with SQLite's online backup mechanism while the service is running, or stop the service and copy the database together with any `-wal` and `-shm` sidecars. Back up the Jev call log at `/data/mcp-hub/data/jev/audit.sqlite3` the same way. Never replace `/data/mcp-hub/data` during an application deployment.
 
 ### Ask an agent to update installed user-scope skills
 

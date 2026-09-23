@@ -1,7 +1,7 @@
 ---
 name: aravind-jev-decisions
 description: Make bounded typed decisions with Jev through OpenRouter.
-version: 0.1.0
+version: 0.1.1
 author: Aravind M J, Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -105,7 +105,7 @@ Keep the default `typesafe/jev-1.13` when thresholds or evaluations depend on st
 - A score is a probability-weighted position whose zero index is the first criterion.
 - Do not ask for free text, explanations, counts, arithmetic, or dependent chains.
 - Do not silently switch from the pinned model to the latest alias.
-- State is sent to OpenRouter and TypeSafe. Minimize it and follow the user's data-handling constraints.
+- State is sent to OpenRouter and TypeSafe, and the hub keeps each call's arguments and result in a private audit log. Minimize it and follow the user's data-handling constraints.
 
 ## Verification
 

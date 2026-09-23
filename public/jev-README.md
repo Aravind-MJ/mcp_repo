@@ -96,6 +96,7 @@ The default model is pinned to `typesafe/jev-1.13`. `~typesafe/jev-latest` is av
 
 - MCP clients never receive the OpenRouter API key. The service reads it from a protected runtime file for every request, so key rotation does not require code changes.
 - Jev data is sent to OpenRouter and its upstream provider. Do not send secrets or data that policy forbids sharing with those processors.
+- The hub keeps each tool call's full arguments and result in a private audit log behind the hub's Basic Auth. Do not send data that must not be retained.
 - Jev always returns a valid declared type, but its judgment can still be wrong. Type safety is not factual correctness.
 - Confidence is evidence for a policy threshold, not permission to take an irreversible or high-stakes action. Keep human review or deterministic checks where the cost of error is high.
 - Jev is for bounded semantic decisions. Do not use it for prose generation, counting, arithmetic, date comparison, open-ended reasoning, or explanations.

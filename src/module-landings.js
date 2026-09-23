@@ -115,6 +115,10 @@ h1 {
 .endpoint span { display: block; margin-bottom: .65rem; color: var(--quiet); font: 700 .67rem/1 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .12em; text-transform: uppercase; }
 .endpoint code { display: block; min-width: 0; color: var(--text); font: 650 .85rem/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
 .endpoint code strong { margin-right: .65rem; color: var(--accent); font-size: .7rem; letter-spacing: .08em; }
+.endpoint + .endpoint { border-top: 0; }
+.dashboard-link { display: flex; min-width: 0; min-height: 1.5rem; align-items: center; justify-content: space-between; gap: 1rem; color: var(--text); font: 650 .8rem/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; text-decoration-color: transparent; text-underline-offset: .28rem; }
+.dashboard-link::after { flex: none; color: var(--accent); content: "↗"; }
+.dashboard-link:hover { text-decoration-color: var(--accent); }
 .actions { display: grid; gap: .6rem; margin-top: 1.5rem; }
 .action {
   display: flex;
@@ -280,6 +284,7 @@ export const ARTIFACT_LANDING_HTML = `<!doctype html>
         <aside class="hero-aside" aria-label="Connection details">
           <span class="status">Bearer authentication required</span>
           <div class="endpoint"><span>Streamable HTTP endpoint</span><code><strong>POST</strong>https://mcp.aravindmj.in/artifact/mcp</code></div>
+          <div class="endpoint"><span>Dashboard · HTTP auth</span><a class="dashboard-link" href="/artifacts">https://mcp.aravindmj.in/artifacts</a></div>
           <div class="trust-note" role="note" aria-labelledby="artifact-trust-title">
             <p id="artifact-trust-title"><strong>Trust boundary:</strong> management and publishing require the shared bearer credential. Keep it out of prompts, logs, source control, shell history, and published HTML.</p>
             <p>Anyone with an unexpired signed URL can view that artifact. Link expiry does not delete stored data; deletion is permanent.</p>
@@ -352,6 +357,7 @@ export const QUESTIONNAIRE_LANDING_HTML = `<!doctype html>
         <aside class="hero-aside" aria-label="Connection details">
           <span class="status">Bearer authentication required</span>
           <div class="endpoint"><span>Streamable HTTP endpoint</span><code><strong>POST</strong>https://mcp.aravindmj.in/questionnaire/mcp</code></div>
+          <div class="endpoint"><span>Dashboard · HTTP auth</span><a class="dashboard-link" href="/questionnaires">https://mcp.aravindmj.in/questionnaires</a></div>
           <nav class="actions" aria-label="Questionnaire Collector resources">
             <a class="action action--primary" href="/questionnaire/README.md">Read installation guide</a>
             <a class="action" href="/questionnaire/SKILL.md">View companion skill</a>
@@ -439,6 +445,7 @@ export const JEV_LANDING_HTML = `<!doctype html>
         <aside class="hero-aside" aria-label="Connection details">
           <span class="status">Bearer authentication required</span>
           <div class="endpoint"><span>Streamable HTTP endpoint</span><code><strong>POST</strong>https://mcp.aravindmj.in/jev/mcp</code></div>
+          <div class="endpoint"><span>Dashboard · HTTP auth</span><a class="dashboard-link" href="/jev/logs">https://mcp.aravindmj.in/jev/logs</a></div>
           <div class="trust-note trust-note--warning" role="note">
             <p><strong>Two trust boundaries:</strong> MCP clients use the hub's shared bearer credential. The upstream OpenRouter key stays on the server and is never returned to clients.</p>
             <p>State is processed by OpenRouter and TypeSafe. Type-safe outputs can still be wrong.</p>

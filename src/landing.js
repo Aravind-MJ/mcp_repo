@@ -231,6 +231,27 @@ export const LANDING_HTML = `<!doctype html>
     .method { color: var(--accent); font-size: .7rem; letter-spacing: .08em; }
     .endpoint code { min-width: 0; overflow-wrap: anywhere; color: #d8d6d0; }
 
+    .dashboard-label { margin-top: 1.5rem; }
+
+    .dashboard-link {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      justify-content: space-between;
+      gap: .65rem;
+      padding: .85rem 0;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      color: #d8d6d0;
+      font: 600 .76rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+      overflow-wrap: anywhere;
+      text-decoration-color: transparent;
+      text-underline-offset: .28rem;
+    }
+
+    .dashboard-link::after { flex: none; color: var(--accent); content: "↗"; }
+    .dashboard-link:hover { color: var(--text); text-decoration-color: var(--accent); }
+
     .module-links {
       display: grid;
       gap: .25rem;
@@ -338,6 +359,8 @@ export const LANDING_HTML = `<!doctype html>
             <div>
               <span class="endpoint-label">Streamable HTTP endpoint</span>
               <div class="endpoint"><span class="method">POST</span><code>/artifact/mcp</code></div>
+              <span class="endpoint-label dashboard-label">Dashboard · HTTP auth</span>
+              <a class="dashboard-link" href="/artifacts">https://mcp.aravindmj.in/artifacts</a>
             </div>
             <nav aria-label="HTML Artifact Publisher resources">
               <ul class="module-links">
@@ -363,6 +386,8 @@ export const LANDING_HTML = `<!doctype html>
             <div>
               <span class="endpoint-label">Streamable HTTP endpoint</span>
               <div class="endpoint"><span class="method">POST</span><code>/questionnaire/mcp</code></div>
+              <span class="endpoint-label dashboard-label">Dashboard · HTTP auth</span>
+              <a class="dashboard-link" href="/questionnaires">https://mcp.aravindmj.in/questionnaires</a>
             </div>
             <nav aria-label="Questionnaire Collector resources">
               <ul class="module-links">
@@ -388,6 +413,8 @@ export const LANDING_HTML = `<!doctype html>
             <div>
               <span class="endpoint-label">Streamable HTTP endpoint</span>
               <div class="endpoint"><span class="method">POST</span><code>/jev/mcp</code></div>
+              <span class="endpoint-label dashboard-label">Dashboard · HTTP auth</span>
+              <a class="dashboard-link" href="/jev/logs">https://mcp.aravindmj.in/jev/logs</a>
             </div>
             <nav aria-label="Jev Structured Decisions resources">
               <ul class="module-links">

@@ -9,8 +9,10 @@ import { QuestionnaireStore } from "./questionnaire/store.js";
 import { createQuestionnaireMcpServer } from "./questionnaire/mcp.js";
 import { mountQuestionnaireRoutes } from "./questionnaire/routes.js";
 import { mountQuestionnaireAdminRoutes } from "./questionnaire/admin.js";
+import { JevAuditLog } from "./jev/audit.js";
 import { JevClient, openRouterApiKeyAvailable } from "./jev/client.js";
 import { createJevMcpServer } from "./jev/mcp.js";
+import { mountJevLogRoutes } from "./jev/logs.js";
 import { LANDING_HTML } from "./landing.js";
 import { ARTIFACT_LANDING_HTML, JEV_LANDING_HTML } from "./module-landings.js";
 import { ServiceError } from "./errors.js";
@@ -196,8 +198,10 @@ export async function createApp(config) {
     apiKeyFile: config.openRouterApiKeyFile,
     timeoutMs: config.jevTimeoutMs,
   });
+  const jevAuditLog = new JevAuditLog(config);
   await store.initialize();
   await questionnaireStore.initialize();
+  await jevAuditLog.initialize();
   await readSharedSecret(config.secretFile);
 
   const app = express();
@@ -245,6 +249,7 @@ export async function createApp(config) {
   mountAttachmentRoutes(app, store.attachments);
   mountQuestionnaireRoutes(app, questionnaireStore, questionnaireStore.config);
   mountQuestionnaireAdminRoutes(app, questionnaireStore, questionnaireStore.config);
+  mountJevLogRoutes(app, jevAuditLog, { staleAfterMs: jevClient.timeoutMs + 60_000 });
 
   app.get("/", (request, response) => {
     securityHeaders(response);
@@ -427,15 +432,18 @@ export async function createApp(config) {
 
   app.use("/jev/mcp", sharedSecretAuth(config.secretFile));
   app.post("/jev/mcp", express.json({ limit: "2mb", strict: true }), async (request, response, next) => {
-    const server = createJevMcpServer(jevClient);
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    const calls = jevAuditLog.receive(request.body);
+    const server = createJevMcpServer(jevClient, calls);
+    const transport = calls.watch(new StreamableHTTPServerTransport({ sessionIdGenerator: undefined }));
     response.on("close", () => {
+      calls.finishUnanswered(response.statusCode);
       void transport.close();
       void server.close();
     });
     try {
       await server.connect(transport);
       await transport.handleRequest(request, response, request.body);
+      calls.finishUnanswered(response.statusCode);
     } catch (error) {
       await transport.close().catch(() => {});
       await server.close().catch(() => {});
@@ -494,5 +502,5 @@ export async function createApp(config) {
     return response.status(status).json({ error: message });
   });
 
-  return { app, store, questionnaireStore };
+  return { app, store, questionnaireStore, jevAuditLog };
 }

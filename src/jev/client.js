@@ -61,6 +61,41 @@ function validAnswer(answer, question) {
     && validDistribution(answer.probabilities, indexes);
 }
 
+const MAX_METADATA_TEXT_LENGTH = 256;
+
+function metadataText(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_METADATA_TEXT_LENGTH ? value : null;
+}
+
+function tokenCount(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+// OpenRouter reports usage.cost in USD. Anything other than a finite, nonnegative number is unavailable.
+function usdCost(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+export function decisionMetadata(payload) {
+  const usage = isPlainObject(payload?.usage) ? payload.usage : {};
+  return {
+    generation_id: metadataText(payload?.id),
+    served_model: metadataText(payload?.model),
+    provider: metadataText(payload?.provider),
+    input_tokens: tokenCount(usage.input_tokens),
+    output_tokens: tokenCount(usage.output_tokens),
+    total_tokens: tokenCount(usage.total_tokens),
+    cost_usd: usdCost(usage.cost),
+  };
+}
+
+// Carries only validated usage metadata from a parsed response, never the response body.
+export function invalidResponseError(payload) {
+  const error = new Error("OpenRouter Decisions returned an invalid response");
+  error.metadata = decisionMetadata(payload);
+  return error;
+}
+
 function validatePayload(payload, questions) {
   if (!isPlainObject(payload) || !isPlainObject(payload.answers)) return false;
   const expectedIds = Object.keys(questions);
@@ -135,9 +170,7 @@ export class JevClient {
     }
 
     const payload = await readBoundedJson(response);
-    if (!validatePayload(payload, questions)) {
-      throw new Error("OpenRouter Decisions returned an invalid response");
-    }
+    if (!validatePayload(payload, questions)) throw invalidResponseError(payload);
     return payload;
   }
 }

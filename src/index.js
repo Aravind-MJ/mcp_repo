@@ -3,7 +3,7 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 
 const config = loadConfig();
-const { app, questionnaireStore } = await createApp(config);
+const { app, questionnaireStore, jevAuditLog } = await createApp(config);
 const server = createServer(app);
 
 server.listen(config.port, config.host, () => {
@@ -14,6 +14,7 @@ function shutdown(signal) {
   console.log(`${signal} received; shutting down`);
   server.close((error) => {
     questionnaireStore.close();
+    jevAuditLog.close();
     process.exit(error ? 1 : 0);
   });
   setTimeout(() => process.exit(1), 10_000).unref();

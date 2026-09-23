@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
-import { DEFAULT_JEV_MODEL, LATEST_JEV_MODEL } from "./client.js";
+import { DEFAULT_JEV_MODEL, LATEST_JEV_MODEL, invalidResponseError } from "./client.js";
 
 const instructions = z.string().min(1).max(8_000).describe("A narrow semantic judgment to make about the supplied state");
 const criterion = z.string().min(1).max(4_000);
@@ -61,6 +61,7 @@ const decisionOutput = {
   answers: z.record(z.string(), answer),
   usage: z.record(z.string(), z.unknown()).optional(),
 };
+const decisionResult = z.object(decisionOutput);
 
 function toolResult(value) {
   return {
@@ -69,7 +70,7 @@ function toolResult(value) {
   };
 }
 
-export function createJevMcpServer(client) {
+export function createJevMcpServer(client, calls) {
   const server = new McpServer({
     name: "personal-jev-decisions",
     title: "Jev Structured Decisions",
@@ -88,9 +89,20 @@ export function createJevMcpServer(client) {
     },
     outputSchema: decisionOutput,
     annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true, readOnlyHint: true },
-  }, async ({ state: inputState, questions: inputQuestions, model }) => toolResult(
-    await client.makeDecisions({ state: inputState, questions: inputQuestions, model }),
-  ));
+  }, async ({ state: inputState, questions: inputQuestions, model }, extra) => {
+    const call = calls.claim(extra.requestId);
+    let payload;
+    try {
+      payload = await client.makeDecisions({ state: inputState, questions: inputQuestions, model });
+    } catch (error) {
+      call.fail(error);
+      throw error;
+    }
+    // McpServer rejects output that fails this schema with its own error, so audit it the same way.
+    if (decisionResult.safeParse(payload).success) call.succeed(payload);
+    else call.fail(invalidResponseError(payload));
+    return toolResult(payload);
+  });
 
   return server;
 }

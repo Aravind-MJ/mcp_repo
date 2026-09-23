@@ -422,7 +422,7 @@ test("serves a public secret-free questionnaire install guide and companion skil
   assert.match(landingHtml, /Bearer authentication required/);
   assert.doesNotMatch(landingHtml, /Authenticated control plane/);
   assert.match(landingHtml, /Read installation guide/);
-  assert.doesNotMatch(landingHtml, /href="\/questionnaires/);
+  assert.match(landingHtml, /href="\/questionnaires">https:\/\/mcp\.aravindmj\.in\/questionnaires<\/a>/);
 
   const readme = await fetch(`${baseUrl}/questionnaire/README.md`);
   assert.equal(readme.status, 200);

@@ -65,7 +65,7 @@ test("generates opaque IDs using alphanumeric characters only", () => {
   for (const artifactId of ids) assert.match(artifactId, /^[A-Za-z0-9]{24}$/);
 });
 
-test("hub and artifact landing do not expose an index", async () => {
+test("hub and artifact landing link the dashboard without exposing an index", async () => {
   const hub = await fetch(`${baseUrl}/`);
   assert.equal(hub.status, 200);
   const hubHtml = await hub.text();
@@ -81,7 +81,7 @@ test("hub and artifact landing do not expose an index", async () => {
   assert.match(artifactHtml, /HTML Artifact Publisher/);
   assert.match(artifactHtml, /Bearer authentication required/);
   assert.match(artifactHtml, /Read installation guide/);
-  assert.doesNotMatch(artifactHtml, /href="\/artifacts/);
+  assert.match(artifactHtml, /href="\/artifacts">https:\/\/mcp\.aravindmj\.in\/artifacts<\/a>/);
 
   const logo = await fetch(`${baseUrl}/logo.svg`);
   assert.equal(logo.status, 200);

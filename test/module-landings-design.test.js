@@ -15,6 +15,7 @@ const pages = [
     serverName: "aravind_html_publisher",
     toolCount: 6,
     authCopy: "Bearer authentication required",
+    dashboard: { href: "/artifacts", text: "https://mcp.aravindmj.in/artifacts" },
   },
   {
     name: "questionnaire",
@@ -28,6 +29,7 @@ const pages = [
     serverName: "aravind_questionnaires",
     toolCount: 11,
     authCopy: "Bearer authentication required",
+    dashboard: { href: "/questionnaires", text: "https://mcp.aravindmj.in/questionnaires" },
   },
   {
     name: "jev",
@@ -41,8 +43,19 @@ const pages = [
     serverName: "aravind_jev_decisions",
     toolCount: 1,
     authCopy: "Bearer authentication required",
+    dashboard: { href: "/jev/logs", text: "https://mcp.aravindmj.in/jev/logs" },
   },
 ];
+
+const dashboardHref = /^\/(?:artifacts|questionnaires|jev\/logs)(?:[/?#]|$)/;
+const dashboardUrl = /(?:https?:\/\/)?mcp\.aravindmj\.in\/(?:artifacts|questionnaires|jev\/logs)[^\s"<]*/g;
+const dashboardUrls = (html) => [...html.matchAll(dashboardUrl)].map(([url]) => url);
+
+function dashboardLinks(html) {
+  return [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)]
+    .map(([, attributes, content]) => ({ href: attributes.match(/\bhref="([^"]*)"/)?.[1] ?? "", text: content.replace(/<[^>]*>/g, "").trim() }))
+    .filter(({ href, text }) => dashboardHref.test(href) || dashboardUrls(text).length > 0);
+}
 
 for (const page of pages) {
   test(`${page.name} landing is a complete self-contained module page`, () => {
@@ -67,7 +80,12 @@ for (const page of pages) {
     assert.ok(hrefs.includes("/"));
     assert.ok(hrefs.includes(page.guide));
     assert.ok(hrefs.includes(page.skill));
-    assert.doesNotMatch(page.html, /href="\/(?:artifacts|questionnaires)(?:[/?#"])/);
+
+    const connectionDetails = page.html.match(/<aside class="hero-aside" aria-label="Connection details">[\s\S]*?<\/aside>/)[0];
+    assert.deepEqual(dashboardLinks(page.html), [page.dashboard], `${page.name} page links exactly its own dashboard`);
+    assert.deepEqual(dashboardLinks(connectionDetails), [page.dashboard], `${page.name} dashboard sits with the connection details`);
+    assert.deepEqual(dashboardUrls(page.html), [page.dashboard.text], `${page.name} page shows no other dashboard URL`);
+    assert.match(connectionDetails, /<div class="endpoint"><span>Dashboard · HTTP auth<\/span><a class="dashboard-link"/);
 
     const faviconPattern = page.favicon.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const markPattern = page.mark.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
