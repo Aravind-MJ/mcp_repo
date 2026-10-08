@@ -42,6 +42,7 @@ let mcpResponseId;
 try {
   const created = (await client.callTool({ name: "create_questionnaire", arguments: {
     title: "Questionnaire experience check",
+    authentication_type: "self_report",
     description: "A comprehensive preview of every supported answer type, autosave, and responsive interaction.",
     questions,
     settings: { submit_label: "Send my response", completion_message: "Your answers are safely recorded.", accent_color: "#6d5dfc" },
