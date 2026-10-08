@@ -105,7 +105,7 @@ test("renders a secure questionnaire index and manages share links and status", 
 });
 
 test("shows response answers privately and requires CSRF for destructive actions", async () => {
-  const questionnaire = store.create({
+  const questionnaire = store.create({ authentication_type: "self_report",
     title: "Research intake",
     questions: [
       { id: "name", type: "short_text", title: "Name", required: true },
@@ -149,7 +149,7 @@ test("shows response answers privately and requires CSRF for destructive actions
 });
 
 test("renders nested response answers with their hierarchy and condition", async () => {
-  const questionnaire = store.create({
+  const questionnaire = store.create({ authentication_type: "self_report",
     title: "Nested review",
     questions: [{
       id: "decision",

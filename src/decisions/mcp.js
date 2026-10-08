@@ -1,6 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
-import { DEFAULT_JEV_MODEL, LATEST_JEV_MODEL, invalidResponseError } from "./client.js";
+import { invalidResponseError } from "./client.js";
+
+import { DEFAULT_DECISION_MODEL, DECISION_MODELS } from "./settings.js";
 
 const instructions = z.string().min(1).max(8_000).describe("A narrow semantic judgment to make about the supplied state");
 const criterion = z.string().min(1).max(4_000);
@@ -28,10 +30,10 @@ const scoreQuestion = z.object({
 });
 
 const question = z.discriminatedUnion("type", [noulQuestion, choiceQuestion, scoreQuestion]);
-const questions = z.record(z.string().min(1).max(128), question).refine((value) => {
+const questions = z.record(z.string().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/), question).refine((value) => {
   const count = Object.keys(value).length;
-  return count >= 1 && count <= 1_000;
-}, "questions must contain between 1 and 1000 entries");
+  return count >= 1 && count <= 64;
+}, "questions must contain between 1 and 64 entries");
 const state = z.union([
   z.string().min(1),
   z.record(z.string(), z.unknown()),
@@ -70,22 +72,22 @@ function toolResult(value) {
   };
 }
 
-export function createJevMcpServer(client, calls) {
+export function createDecisionMcpServer(client, calls, defaultModel = DEFAULT_DECISION_MODEL) {
   const server = new McpServer({
-    name: "personal-jev-decisions",
-    title: "Jev Structured Decisions",
+    name: "personal-decision-maker",
+    title: "Decision Maker",
     version: "1.0.0",
-    description: "Makes fast typed semantic decisions with Jev through OpenRouter.",
+    description: "Makes fast typed semantic decisions with a selectable model through OpenRouter.",
   });
 
   server.registerTool("make_decisions", {
-    title: "Make typed Jev decisions",
-    description: "Evaluate one text or structured state against independent typed questions in parallel. Noul returns a yes probability; choice returns one declared option and its distribution; score returns a position on an ordered rubric. Jev does not generate prose, count reliably, perform arithmetic, or explain its reasoning.",
+    title: "Make typed decisions",
+    description: "Evaluate one text or structured state against independent typed questions in parallel. Noul returns a yes probability; choice returns one declared option and its distribution; score returns a position on an ordered rubric. Decision models do not generate prose, count reliably, perform arithmetic, or explain its reasoning.",
     inputSchema: {
       state,
       questions,
-      model: z.enum([DEFAULT_JEV_MODEL, LATEST_JEV_MODEL]).optional().default(DEFAULT_JEV_MODEL)
-        .describe("Pin typesafe/jev-1.13 for stable tuned thresholds; use ~typesafe/jev-latest only when accepting model drift"),
+      model: z.enum(Object.keys(DECISION_MODELS)).optional()
+        .describe("Optional per-call override. Omit to use the default model selected in the private log dashboard."),
     },
     outputSchema: decisionOutput,
     annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true, readOnlyHint: true },
@@ -93,7 +95,7 @@ export function createJevMcpServer(client, calls) {
     const call = calls.claim(extra.requestId);
     let payload;
     try {
-      payload = await client.makeDecisions({ state: inputState, questions: inputQuestions, model });
+      payload = await client.makeDecisions({ state: inputState, questions: inputQuestions, model: model ?? defaultModel });
     } catch (error) {
       call.fail(error);
       throw error;

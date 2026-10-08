@@ -75,9 +75,11 @@ test("authenticated questionnaire MCP exposes management and answering tools", a
       "get_questionnaire_signed_url",
       "list_questionnaire_responses",
       "list_questionnaires",
+      "request_questionnaire_email_verification",
       "set_questionnaire_status",
       "submit_questionnaire_response",
       "update_questionnaire",
+      "verify_questionnaire_email",
     ]);
   } finally {
     await client.close();
@@ -144,7 +146,7 @@ test("manages revisioned questionnaires and signed URLs through the real MCP pro
   try {
     const created = (await client.callTool({
       name: "create_questionnaire",
-      arguments: { title: "Customer check-in", description: "Two quick questions.", questions },
+      arguments: { title: "Customer check-in", description: "Two quick questions.", authentication_type: "self_report", questions },
     })).structuredContent;
     assert.match(created.questionnaire_id, /^[A-Za-z0-9]{24}$/);
     assert.equal(created.revision, 1);

@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
 
 export const OPENROUTER_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
-export const DEFAULT_JEV_MODEL = "typesafe/jev-1.13";
-export const LATEST_JEV_MODEL = "~typesafe/jev-latest";
+import { DEFAULT_DECISION_MODEL, DECISION_MODELS } from "./settings.js";
+export { DEFAULT_DECISION_MODEL } from "./settings.js";
 
 export async function readOpenRouterApiKey(apiKeyFile) {
   let key;
@@ -139,14 +139,15 @@ async function readBoundedJson(response) {
   }
 }
 
-export class JevClient {
+export class DecisionClient {
   constructor({ apiKeyFile, timeoutMs = 30_000, fetchFn } = {}) {
     this.apiKeyFile = apiKeyFile;
     this.timeoutMs = timeoutMs;
     this.fetchFn = fetchFn ?? ((...args) => globalThis.fetch(...args));
   }
 
-  async makeDecisions({ state, questions, model = DEFAULT_JEV_MODEL }) {
+  async makeDecisions({ state, questions, model = DEFAULT_DECISION_MODEL }) {
+    if (!Object.hasOwn(DECISION_MODELS, model)) throw new Error("Unsupported decision model");
     const apiKey = await readOpenRouterApiKey(this.apiKeyFile);
     let response;
     try {

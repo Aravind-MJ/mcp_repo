@@ -31,7 +31,7 @@ The MCP management plane requires Bearer authentication. Keep the credential pro
 2. Call `create_questionnaire` with a concise title, optional introduction, questions, and optional presentation settings.
 3. Verify the returned `questionnaire_id` is 24 alphanumeric characters and the URL includes `expires` and `signature`.
 4. Give the user the returned revisionless latest URL and its expiry. Mint an exact-revision URL only when immutable historical access is requested.
-5. When answering through MCP, call `submit_questionnaire_response` with the questionnaire ID, optional revision, a respondent name and email, and the complete flat answer object.
+5. When answering through MCP, call `submit_questionnaire_response` with the questionnaire ID, optional revision, and the complete flat answer object. Check `authentication_type` first: omit `respondent` for `anonymous`; pass the respondent name and email for `self_report`; for `email_verified`, call `request_questionnaire_email_verification`, get the six-digit code from the respondent (it can take a few minutes and may be in spam or junk), call `verify_questionnaire_email`, then submit with `response_id`, `verification_proof`, and the same respondent email.
 6. Use `list_questionnaire_responses`, optionally filtered to `submitted`, to list response metadata, attribution, and IDs.
 7. Use `get_questionnaire_response` for each answer body you need.
 8. Close collection with `set_questionnaire_status(status="closed")`; do not delete merely to stop answers.
@@ -91,12 +91,13 @@ Useful validation fields:
 
 ## Response semantics
 
-Browser drafts are technical records with random IDs and no respondent identity; name and email are attached only at final submission. Every new final submission requires both fields. Draft edit tokens are never exposed through management tools, are isolated to the current browser tab, and are stored only as hashes in SQLite. Response versions reject stale-tab overwrites. Drafts may contain incomplete input because autosave runs while a person types; `status="submitted"` is the reliable filter for finalized answers. Legacy submissions created before identity tracking may return `respondent: null`.
+Browser drafts are technical records with random IDs and no respondent identity; name and email are attached only at final submission. Set `authentication_type` when creating a questionnaire: `anonymous` (default, no identity accepted), `self_report` (name and email required, not checked), or `email_verified` (name self-reported, email confirmed by a one-time code). Each revision keeps its own mode, and `update_questionnaire` keeps the previous mode unless you pass one. Draft edit tokens are never exposed through management tools, are isolated to the current browser tab, and are stored only as hashes in SQLite. Response versions reject stale-tab overwrites. Drafts may contain incomplete input because autosave runs while a person types; `status="submitted"` is the reliable filter for finalized answers. Legacy submissions created before identity tracking return `respondent: null` with `identity_status: "legacy_missing"`.
 
 ## Safety
 
 - Do not request secrets, passwords, private keys, payment card data, or unnecessary sensitive personal data in a questionnaire.
-- Treat the submitted respondent name and email as self-asserted attribution, not verified identity or proof of uniqueness.
+- Treat respondent names as self-asserted in every mode. Treat emails as verified only when `identity_status` is `email_verified`. Neither proves uniqueness: one email may submit several responses.
+- Never ask the user to paste a verification code into a questionnaire answer, and never log or repeat a code or `verification_proof`.
 - Anyone holding the shared MCP bearer token can manage questionnaires and read responses.
 - A signed answer URL stops working at expiry, but already stored responses remain until deleted.
 - Closing prevents new saves; deleting permanently removes all revisions and responses.

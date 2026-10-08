@@ -20,7 +20,7 @@ export const LANDING_HTML = `<!doctype html>
       --line: #32343b;
       --artifact: #aeb9ff;
       --questionnaire: #9ed8b1;
-      --jev: #e7a8ff;
+      --decisions: #e7a8ff;
       --shell: 76rem;
     }
 
@@ -140,7 +140,7 @@ export const LANDING_HTML = `<!doctype html>
     }
 
     .module--questionnaire { --accent: var(--questionnaire); }
-    .module--jev { --accent: var(--jev); }
+    .module--decisions { --accent: var(--decisions); }
 
     .module-index {
       margin: .35rem 0 0;
@@ -377,7 +377,7 @@ export const LANDING_HTML = `<!doctype html>
           <div class="module-copy">
             <div class="module-meta">
               <span class="access">Bearer protected</span>
-              <span class="tool-count">11 tools</span>
+              <span class="tool-count">13 tools</span>
             </div>
             <h2 id="questionnaire-title">Questionnaire Collector</h2>
             <p class="module-description">Create revisioned questionnaires, share signed answer forms, and collect responses.</p>
@@ -399,28 +399,28 @@ export const LANDING_HTML = `<!doctype html>
           </div>
         </article>
 
-        <article class="module module--jev" data-mcp-entry="jev" aria-labelledby="jev-title">
+        <article class="module module--decisions" data-mcp-entry="decisions" aria-labelledby="decisions-title">
           <p class="module-index" aria-hidden="true">03</p>
           <div class="module-copy">
             <div class="module-meta">
               <span class="access">Bearer protected</span>
               <span class="tool-count">1 tool</span>
             </div>
-            <h2 id="jev-title">Jev Structured Decisions</h2>
+            <h2 id="decisions-title">Decision Maker</h2>
             <p class="module-description">Make bounded semantic choices, scores, and yes/no probability judgments through OpenRouter.</p>
           </div>
           <div class="module-technical">
             <div>
               <span class="endpoint-label">Streamable HTTP endpoint</span>
-              <div class="endpoint"><span class="method">POST</span><code>/jev/mcp</code></div>
+              <div class="endpoint"><span class="method">POST</span><code>/decisions/mcp</code></div>
               <span class="endpoint-label dashboard-label">Dashboard · HTTP auth</span>
-              <a class="dashboard-link" href="/jev/logs">https://mcp.aravindmj.in/jev/logs</a>
+              <a class="dashboard-link" href="/decisions/logs">https://mcp.aravindmj.in/decisions/logs</a>
             </div>
-            <nav aria-label="Jev Structured Decisions resources">
+            <nav aria-label="Decision Maker resources">
               <ul class="module-links">
-                <li><a href="/jev">Overview</a></li>
-                <li><a href="/jev/README.md">Install guide</a></li>
-                <li><a href="/jev/SKILL.md">Companion skill</a></li>
+                <li><a href="/decisions">Overview</a></li>
+                <li><a href="/decisions/README.md">Install guide</a></li>
+                <li><a href="/decisions/SKILL.md">Companion skill</a></li>
               </ul>
             </nav>
           </div>

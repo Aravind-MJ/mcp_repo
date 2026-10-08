@@ -9,12 +9,13 @@ import { QuestionnaireStore } from "./questionnaire/store.js";
 import { createQuestionnaireMcpServer } from "./questionnaire/mcp.js";
 import { mountQuestionnaireRoutes } from "./questionnaire/routes.js";
 import { mountQuestionnaireAdminRoutes } from "./questionnaire/admin.js";
-import { JevAuditLog } from "./jev/audit.js";
-import { JevClient, openRouterApiKeyAvailable } from "./jev/client.js";
-import { createJevMcpServer } from "./jev/mcp.js";
-import { mountJevLogRoutes } from "./jev/logs.js";
+import { DecisionAuditLog } from "./decisions/audit.js";
+import { DecisionClient, openRouterApiKeyAvailable } from "./decisions/client.js";
+import { createDecisionMcpServer } from "./decisions/mcp.js";
+import { DecisionSettings } from "./decisions/settings.js";
+import { mountDecisionLogRoutes } from "./decisions/logs.js";
 import { LANDING_HTML } from "./landing.js";
-import { ARTIFACT_LANDING_HTML, JEV_LANDING_HTML } from "./module-landings.js";
+import { ARTIFACT_LANDING_HTML, DECISION_LANDING_HTML } from "./module-landings.js";
 import { ServiceError } from "./errors.js";
 import { artifactSignedUrlIsValid, createGalleryFlash, galleryCsrfIsValid, galleryCsrfToken, readGalleryFlash, readSharedSecret, sharedSecretAuth } from "./security.js";
 
@@ -24,9 +25,9 @@ const PUBLIC_LOGO = await readFile(new URL("../public/logo.svg", import.meta.url
 const PUBLIC_FAVICON = await readFile(new URL("../public/favicon.svg", import.meta.url), "utf8");
 const PUBLIC_HUB_MARK = await readFile(new URL("../public/hub.svg", import.meta.url), "utf8");
 const PUBLIC_QUESTIONNAIRE_MARK = await readFile(new URL("../public/questionnaire.svg", import.meta.url), "utf8");
-const PUBLIC_JEV_MARK = await readFile(new URL("../public/jev.svg", import.meta.url), "utf8");
-const PUBLIC_JEV_INSTALL_README = await readFile(new URL("../public/jev-README.md", import.meta.url), "utf8");
-const PUBLIC_JEV_SKILL = await readFile(new URL("../public/jev-SKILL.md", import.meta.url), "utf8");
+const PUBLIC_DECISION_MARK = await readFile(new URL("../public/decisions.svg", import.meta.url), "utf8");
+const PUBLIC_DECISION_INSTALL_README = await readFile(new URL("../public/decisions-README.md", import.meta.url), "utf8");
+const PUBLIC_DECISION_SKILL = await readFile(new URL("../public/decisions-SKILL.md", import.meta.url), "utf8");
 const GALLERY_FLASH_COOKIE = "artifact_gallery_flash";
 
 function cookieValue(request, name) {
@@ -194,25 +195,28 @@ for (const dialog of document.querySelectorAll(".delete-dialog")) {
 export async function createApp(config) {
   const store = new ArtifactStore(config);
   const questionnaireStore = new QuestionnaireStore(config);
-  const jevClient = new JevClient({
+  const decisionsClient = new DecisionClient({
     apiKeyFile: config.openRouterApiKeyFile,
-    timeoutMs: config.jevTimeoutMs,
+    timeoutMs: config.decisionsTimeoutMs,
   });
-  const jevAuditLog = new JevAuditLog(config);
+  const decisionsAuditLog = new DecisionAuditLog(config);
+  const decisionSettings = new DecisionSettings(config);
   await store.initialize();
   await questionnaireStore.initialize();
-  await jevAuditLog.initialize();
+  await decisionsAuditLog.initialize();
   await readSharedSecret(config.secretFile);
 
   const app = express();
   app.use(hostHeaderValidation(config.allowedHosts));
   app.disable("x-powered-by");
+  // Caddy forwards from loopback; per-IP verification limits need the client address it reports.
+  app.set("trust proxy", config.trustProxy ?? "loopback");
 
   app.get("/healthz", async (request, response) => {
     securityHeaders(response);
     response.set("Cache-Control", "no-store");
     const modules = ["artifact", "questionnaire"];
-    if (await openRouterApiKeyAvailable(config.openRouterApiKeyFile)) modules.push("jev");
+    if (await openRouterApiKeyAvailable(config.openRouterApiKeyFile)) modules.push("decisions");
     response.json({ status: "ok", modules });
   });
 
@@ -240,16 +244,22 @@ export async function createApp(config) {
     response.type("image/svg+xml").send(PUBLIC_QUESTIONNAIRE_MARK);
   });
 
-  app.get("/jev.svg", (request, response) => {
+  app.get("/decisions.svg", (request, response) => {
     securityHeaders(response);
     response.set("Cache-Control", "public, max-age=86400");
-    response.type("image/svg+xml").send(PUBLIC_JEV_MARK);
+    response.type("image/svg+xml").send(PUBLIC_DECISION_MARK);
   });
 
   mountAttachmentRoutes(app, store.attachments);
   mountQuestionnaireRoutes(app, questionnaireStore, questionnaireStore.config);
   mountQuestionnaireAdminRoutes(app, questionnaireStore, questionnaireStore.config);
-  mountJevLogRoutes(app, jevAuditLog, { staleAfterMs: jevClient.timeoutMs + 60_000 });
+  mountDecisionLogRoutes(app, decisionsAuditLog, { staleAfterMs: decisionsClient.timeoutMs + 60_000, settings: decisionSettings, secretFile: config.secretFile, publicBaseUrl: config.publicBaseUrl });
+  // Keep audit history behind the existing private artifacts namespace in Caddy.
+  app.get(["/decisions/logs", "/decisions/logs/"], (request, response) => {
+    const offset = typeof request.query.offset === "string" && /^\d+$/.test(request.query.offset) ? `?offset=${request.query.offset}` : "";
+    response.set("Cache-Control", "no-store");
+    response.redirect(307, `/artifacts/decisions/logs${offset}`);
+  });
 
   app.get("/", (request, response) => {
     securityHeaders(response);
@@ -265,11 +275,11 @@ export async function createApp(config) {
     response.type("html").send(ARTIFACT_LANDING_HTML);
   });
 
-  app.get(["/jev", "/jev/"], (request, response) => {
+  app.get(["/decisions", "/decisions/"], (request, response) => {
     securityHeaders(response);
     response.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     response.set("Cache-Control", "public, max-age=300");
-    response.type("html").send(JEV_LANDING_HTML);
+    response.type("html").send(DECISION_LANDING_HTML);
   });
 
   app.get(["/artifacts", "/artifacts/"], async (request, response, next) => {
@@ -350,16 +360,16 @@ export async function createApp(config) {
     response.type("text/markdown; charset=utf-8").send(PUBLIC_SKILL);
   });
 
-  app.get(["/jev/README.md", "/jev/install.md"], (request, response) => {
+  app.get(["/decisions/README.md", "/decisions/install.md"], (request, response) => {
     securityHeaders(response);
     response.set("Cache-Control", "public, max-age=300");
-    response.type("text/markdown; charset=utf-8").send(PUBLIC_JEV_INSTALL_README);
+    response.type("text/markdown; charset=utf-8").send(PUBLIC_DECISION_INSTALL_README);
   });
 
-  app.get("/jev/SKILL.md", (request, response) => {
+  app.get("/decisions/SKILL.md", (request, response) => {
     securityHeaders(response);
     response.set("Cache-Control", "public, max-age=300");
-    response.type("text/markdown; charset=utf-8").send(PUBLIC_JEV_SKILL);
+    response.type("text/markdown; charset=utf-8").send(PUBLIC_DECISION_SKILL);
   });
 
   app.get("/artifact/:artifactId/versions/:version", async (request, response, next) => {
@@ -413,7 +423,7 @@ export async function createApp(config) {
 
   app.use("/questionnaire/mcp", sharedSecretAuth(config.secretFile));
   app.post("/questionnaire/mcp", express.json({ limit: "1mb", strict: true }), async (request, response, next) => {
-    const server = createQuestionnaireMcpServer(questionnaireStore);
+    const server = createQuestionnaireMcpServer(questionnaireStore, { sourceIp: request.ip });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     response.on("close", () => {
       void transport.close();
@@ -430,10 +440,11 @@ export async function createApp(config) {
   });
   app.all("/questionnaire/mcp", (request, response) => jsonRpcMethodNotAllowed(response));
 
-  app.use("/jev/mcp", sharedSecretAuth(config.secretFile));
-  app.post("/jev/mcp", express.json({ limit: "2mb", strict: true }), async (request, response, next) => {
-    const calls = jevAuditLog.receive(request.body);
-    const server = createJevMcpServer(jevClient, calls);
+  app.use("/decisions/mcp", sharedSecretAuth(config.secretFile));
+  app.post("/decisions/mcp", express.json({ limit: "2mb", strict: true }), async (request, response, next) => {
+    const defaultModel = await decisionSettings.getModel();
+    const calls = decisionsAuditLog.receive(request.body, defaultModel);
+    const server = createDecisionMcpServer(decisionsClient, calls, defaultModel);
     const transport = calls.watch(new StreamableHTTPServerTransport({ sessionIdGenerator: undefined }));
     response.on("close", () => {
       calls.finishUnanswered(response.statusCode);
@@ -450,7 +461,7 @@ export async function createApp(config) {
       next(error);
     }
   });
-  app.all("/jev/mcp", (request, response) => jsonRpcMethodNotAllowed(response));
+  app.all("/decisions/mcp", (request, response) => jsonRpcMethodNotAllowed(response));
 
   app.get("/artifact/:artifactId", async (request, response, next) => {
     try {
@@ -502,5 +513,5 @@ export async function createApp(config) {
     return response.status(status).json({ error: message });
   });
 
-  return { app, store, questionnaireStore, jevAuditLog };
+  return { app, store, questionnaireStore, decisionsAuditLog, decisionSettings };
 }

@@ -15,6 +15,7 @@ export function loadConfig(env = process.env) {
   const host = env.MCP_HUB_HOST || "127.0.0.1";
   const publicBaseUrl = (env.MCP_HUB_PUBLIC_BASE_URL || "https://mcp.aravindmj.in").replace(/\/+$/, "");
   const publicHost = new URL(publicBaseUrl).host;
+  const smtpPort = positiveInteger(env.QUESTIONNAIRE_SMTP_PORT, 587, "QUESTIONNAIRE_SMTP_PORT");
 
   return Object.freeze({
     host,
@@ -22,7 +23,7 @@ export function loadConfig(env = process.env) {
     dataDir: env.MCP_HUB_DATA_DIR || path.join(runtimeDir, "data"),
     secretFile: env.MCP_SHARED_SECRET_FILE || path.join(runtimeDir, "secrets", "shared-secret"),
     openRouterApiKeyFile: env.OPENROUTER_API_KEY_FILE || path.join(runtimeDir, "secrets", "openrouter-api-key"),
-    jevTimeoutMs: positiveInteger(env.JEV_OPENROUTER_TIMEOUT_MS, 30_000, "JEV_OPENROUTER_TIMEOUT_MS"),
+    decisionsTimeoutMs: positiveInteger(env.DECISION_OPENROUTER_TIMEOUT_MS, 30_000, "DECISION_OPENROUTER_TIMEOUT_MS"),
     publicBaseUrl,
     maxHtmlBytes: positiveInteger(env.ARTIFACT_MAX_HTML_BYTES, 2 * 1024 * 1024, "ARTIFACT_MAX_HTML_BYTES"),
     maxAttachmentBytes: positiveInteger(env.ARTIFACT_MAX_ATTACHMENT_BYTES, 256 * 1024 * 1024, "ARTIFACT_MAX_ATTACHMENT_BYTES"),
@@ -34,5 +35,15 @@ export function loadConfig(env = process.env) {
     maxResponsesPerQuestionnaire: positiveInteger(env.QUESTIONNAIRE_MAX_RESPONSES, 10_000, "QUESTIONNAIRE_MAX_RESPONSES"),
     maxAnswerBytes: positiveInteger(env.QUESTIONNAIRE_MAX_ANSWER_BYTES, 256 * 1024, "QUESTIONNAIRE_MAX_ANSWER_BYTES"),
     allowedHosts: [...new Set(["127.0.0.1", "localhost", publicHost])],
+    trustProxy: { true: true, false: false }[env.MCP_HUB_TRUST_PROXY] ?? (env.MCP_HUB_TRUST_PROXY || "loopback"),
+    questionnaireSmtp: Object.freeze({
+      host: env.QUESTIONNAIRE_SMTP_HOST || "",
+      port: smtpPort,
+      secure: env.QUESTIONNAIRE_SMTP_SECURE === undefined ? smtpPort === 465 : env.QUESTIONNAIRE_SMTP_SECURE === "true",
+      requireTLS: true,
+      user: env.QUESTIONNAIRE_SMTP_USER || "",
+      passwordFile: env.QUESTIONNAIRE_SMTP_PASSWORD_FILE || path.join(runtimeDir, "secrets", "questionnaire-smtp-password"),
+      from: env.QUESTIONNAIRE_SMTP_FROM || "",
+    }),
   });
 }

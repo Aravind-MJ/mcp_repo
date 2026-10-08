@@ -24,10 +24,10 @@ If you are an agent reading this guide, install the service in the harness where
 2. **Check for an existing registration.** Look for the exact server name `aravind_questionnaires`. If it already exists, update it in place instead of creating a duplicate.
 3. **Register the remote server.** Configure MCP Streamable HTTP at `https://mcp.aravindmj.in/questionnaire/mcp` under the exact name `aravind_questionnaires`.
 4. **Set authentication correctly.** Configure `Authorization: Bearer <shared-secret>` on every request with the credential provisioned by the service owner. Do not invent, expose, or rotate credentials. If it is unavailable, stop and ask Aravind to configure it securely.
-5. **Enable the complete toolset.** Enable all eleven tools listed below rather than selecting only creation tools.
+5. **Enable the complete toolset.** Enable all thirteen tools listed below rather than selecting only creation tools.
 6. **Install the companion skill.** If the harness supports agent skills, fetch `https://mcp.aravindmj.in/questionnaire/SKILL.md`, validate that its frontmatter name is `aravind-questionnaire-collector`, and install it through the harness's native user-level skill mechanism. Update an existing copy rather than creating another one.
 7. **Reload the tool schema.** Reconnect the MCP server or start a new agent session, according to the harness's lifecycle.
-8. **Verify before reporting success.** Confirm initialization and all eleven tools. Create a harmless disposable questionnaire, exercise browser submission and `submit_questionnaire_response`, retrieve both identified responses, delete the questionnaire, and confirm it is absent from `list_questionnaires`.
+8. **Verify before reporting success.** Confirm initialization and all thirteen tools. Create a harmless disposable questionnaire, exercise browser submission and `submit_questionnaire_response`, retrieve both identified responses, delete the questionnaire, and confirm it is absent from `list_questionnaires`.
 9. **Report the result.** State the harness, installation scope, local server name, discovered tools, skill location if applicable, and smoke-test cleanup result.
 
 Use the current harness's native CLI, settings UI, or configuration file. Do not copy commands for another harness merely because they appear in this guide.
@@ -69,7 +69,7 @@ hermes mcp add aravind_questionnaires \
 hermes mcp test aravind_questionnaires
 ```
 
-Enter the credential provisioned by the service owner only at the hidden credential prompt, enable all eleven tools, and start a new session so the discovered tools enter the session's tool schema. For a Hermes deployment, environment variables are managed in **hPanel → Hermes Agent → Dashboard → Environment**, not shell startup files or project `.env` files.
+Enter the credential provisioned by the service owner only at the hidden credential prompt, enable all thirteen tools, and start a new session so the discovered tools enter the session's tool schema. For a Hermes deployment, environment variables are managed in **hPanel → Hermes Agent → Dashboard → Environment**, not shell startup files or project `.env` files.
 
 ## Tools
 
@@ -80,7 +80,9 @@ Enter the credential provisioned by the service owner only at the hidden credent
 | `get_questionnaire` | Read the current or an exact revision, response counts, and a matching fresh signed URL. |
 | `list_questionnaires` | List current questionnaires and counts with pagination. |
 | `get_questionnaire_signed_url` | Mint a latest-revision link by default, or an exact-revision link when `revision` is supplied, valid from 60 seconds through one year. |
-| `submit_questionnaire_response` | Submit complete answers with required respondent name and email directly through MCP; no browser draft or signed link is needed. |
+| `submit_questionnaire_response` | Submit complete answers directly through MCP. `anonymous` takes no respondent, `self_report` requires name and email, and `email_verified` also needs `response_id` and `verification_proof`. |
+| `request_questionnaire_email_verification` | For `email_verified` questionnaires: email a six-digit code to the respondent and return the pending `response_id`. Pass that `response_id` again to resend or change the email. |
+| `verify_questionnaire_email` | Check the code the respondent received and return a single-use `verification_proof` for that response and email. |
 | `set_questionnaire_status` | Open or close response collection without deleting data. |
 | `delete_questionnaire` | Permanently delete all revisions and responses. |
 | `list_questionnaire_responses` | List bounded response metadata, optionally by revision or status. |
@@ -158,14 +160,45 @@ Conditions are explicit; numbering and adjacent placement never imply a relation
 - The default signed link is revisionless (`/questionnaire/{id}`), is bound to the `latest` scope, and resolves the newest revision on every request until expiry.
 - Supplying `revision` creates an immutable `/questionnaire/{id}/r/{revision}` link bound to that exact revision. Latest and exact signatures cannot be moved between scopes.
 - Each loaded latest page receives a response-only scope bound to the revision it displayed, so an in-progress tab can autosave and submit safely if a newer revision is published. Reloading the default URL displays the newest revision.
-- The browser creates an anonymous draft only after the respondent starts answering; name and email are not included in autosaves.
+- The browser creates an identity-free draft only after the respondent starts answering; name and email are never included in autosaves.
 - A random edit token is isolated to the current browser tab in session storage; only its SHA-256 hash is stored in SQLite. Optimistic response versions reject stale-tab overwrites.
-- Autosave accepts in-progress typing. Final submission enforces required fields, formats, ranges, selection limits, and a respondent name and email.
-- `submit_questionnaire_response` creates one final identified response atomically. Omit `revision` to answer the current revision, or supply an exact revision.
-- The service does not create respondent accounts or cookies. It stores the submitted name and email with the finalized response for attribution.
+- Autosave accepts in-progress typing. Final submission enforces required fields, formats, ranges, selection limits, and the identity rules of the questionnaire's authentication mode.
+- `submit_questionnaire_response` creates one final response atomically. Omit `revision` to answer the current revision, or supply an exact revision.
+- The service does not create respondent accounts or cookies.
+
+## Authentication modes
+
+Each revision has an `authentication_type`. New questionnaires default to `anonymous`. `update_questionnaire` keeps the previous mode unless you pass a new one, and the change applies only to the new revision. Revisions created before modes existed are `self_report`.
+
+| Mode | What the respondent provides | What is stored |
+|---|---|---|
+| `anonymous` | Nothing. Sending a name or email is rejected. Answers to email or phone questions are still allowed. | `respondent: null` |
+| `self_report` | Name and email, typed in a dialog after the answers pass validation. Neither is checked. | Name and email, `identity_status: "self_reported"` |
+| `email_verified` | Name (self-reported) and an email confirmed with a six-digit code. | Name, email, `email_verified_at`, `identity_status: "email_verified"` |
+
+Responses include `authentication_type`, `identity_status` (`anonymous`, `self_reported`, `email_verified`, `legacy_missing`, or `pending` for drafts), `respondent`, and `email_verified_at` (set only for verified submissions). `legacy_missing` marks submissions made before identity was collected.
+
+Email verification rules, the same for the browser and MCP:
+
+- Codes are six random digits, expire after 10 minutes, and work once. Five wrong entries lock the code until a new one is sent.
+- A new code can be requested after 60 seconds. Sending a new code, or changing the email, invalidates the earlier one.
+- At most 5 codes per email per questionnaire per hour, and 20 per client IP per hour. Failed deliveries count toward both limits.
+- A correct code returns a `verification_proof`, valid for 30 minutes. It is bound to the questionnaire, revision, response, and email, and is consumed in the same transaction that accepts the submission.
+- Codes and proofs are stored only as SHA-256 hashes. Send-rate records keep hashed email and IP values only.
+- If email delivery is not configured or the provider rejects the message, the request fails with an error that says no code was sent. There is no fallback to self-reporting.
+- The same email may verify any number of separate responses.
+
+MCP flow for `email_verified`:
+
+1. `request_questionnaire_email_verification` with `questionnaire_id` and `respondent`. Keep the returned `response_id`.
+2. Ask the respondent for the code from their inbox. It can take a few minutes and may land in spam or junk.
+3. `verify_questionnaire_email` with `response_id`, `email`, and `code`.
+4. `submit_questionnaire_response` with `response_id`, `verification_proof`, the same `respondent`, and `answers`.
+
+The bearer token does not skip any of these steps.
 - Closing a questionnaire blocks draft creation and updates while retaining all definitions and responses.
 - Updating a questionnaire creates a new revision. Existing default links begin showing it automatically; explicit `/r/{revision}` links keep showing their exact prior revision.
 
 ## Verification
 
-A valid installation should discover all eleven tools. Create a disposable questionnaire, submit once through its signed browser flow and once with `submit_questionnaire_response`, confirm both list entries include respondent attribution, retrieve their answers with `get_questionnaire_response`, then delete the disposable questionnaire.
+A valid installation should discover all thirteen tools. Create a disposable `self_report` questionnaire, submit once through its signed browser flow and once with `submit_questionnaire_response`, confirm both list entries include respondent attribution, retrieve their answers with `get_questionnaire_response`, then delete the disposable questionnaire.

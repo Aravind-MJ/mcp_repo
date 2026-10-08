@@ -7,8 +7,8 @@ import { afterEach, beforeEach, test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createApp } from "../src/app.js";
-import { JevAuditLog } from "../src/jev/audit.js";
-import { JevClient } from "../src/jev/client.js";
+import { DecisionAuditLog } from "../src/decisions/audit.js";
+import { DecisionClient } from "../src/decisions/client.js";
 
 let root;
 let server;
@@ -21,7 +21,7 @@ const firstOpenRouterKey = "sk-or-v1-first-test-key";
 const isoTimestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(os.tmpdir(), "jev-mcp-test-"));
+  root = await mkdtemp(path.join(os.tmpdir(), "decisions-mcp-test-"));
   const secretDirectory = path.join(root, "secrets");
   const secretFile = path.join(secretDirectory, "shared-secret");
   const openRouterApiKeyFile = path.join(secretDirectory, "openrouter-api-key");
@@ -44,7 +44,7 @@ beforeEach(async () => {
   };
   originalFetch = globalThis.fetch;
   const created = await createApp(config);
-  auditLog = created.jevAuditLog;
+  auditLog = created.decisionsAuditLog;
   server = createServer(created.app);
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -61,8 +61,8 @@ afterEach(async () => {
 });
 
 async function mcpClient() {
-  const client = new Client({ name: "jev-tests", version: "1.0.0" });
-  await client.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/jev/mcp`), {
+  const client = new Client({ name: "decisions-tests", version: "1.0.0" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/decisions/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${sharedSecret}` } },
   }));
   return client;
@@ -73,7 +73,7 @@ function toolCall(id, name, args) {
 }
 
 function postJsonRpc(body, headers = {}, signal = undefined) {
-  return originalFetch(`${baseUrl}/jev/mcp`, {
+  return originalFetch(`${baseUrl}/decisions/mcp`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${sharedSecret}`,
@@ -120,7 +120,7 @@ const questions = {
   },
 };
 
-test("authenticated Jev MCP forwards typed decisions and reloads the upstream key", async () => {
+test("authenticated Decision MCP forwards typed decisions and reloads the upstream key", async () => {
   const authorizations = [];
   globalThis.fetch = async (url, options) => {
     if (!String(url).startsWith("https://openrouter.ai/")) return originalFetch(url, options);
@@ -129,13 +129,13 @@ test("authenticated Jev MCP forwards typed decisions and reloads the upstream ke
     assert.equal(options.method, "POST");
     assert.equal(options.headers["Content-Type"], "application/json");
     const request = JSON.parse(options.body);
-    assert.equal(request.model, "typesafe/jev-1.13");
+    assert.equal(request.model, "cloudflare/clef-flash");
     assert.deepEqual(request.state, { ticket: "Checkout is blank" });
     assert.deepEqual(request.questions, questions);
     return Response.json({
       id: "gen-dec-test",
-      model: "typesafe/jev-1.13-20260917",
-      provider: "TypeSafe",
+      model: "cloudflare/clef-flash",
+      provider: "Cloudflare",
       answers: {
         is_bug: { type: "noul", noul: 0.96 },
         team: { type: "choice", choice: "payments", confidence: 0.67, probabilities: { payments: 0.78, frontend: 0.22 } },
@@ -168,10 +168,10 @@ test("authenticated Jev MCP forwards typed decisions and reloads the upstream ke
   }
 });
 
-test("Jev endpoint shares hub authentication and exposes secret-free resources", async () => {
+test("Decision endpoint shares hub authentication and exposes secret-free resources", async () => {
   const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } } };
   for (const authorization of [undefined, "Bearer wrong-secret"]) {
-    const response = await originalFetch(`${baseUrl}/jev/mcp`, {
+    const response = await originalFetch(`${baseUrl}/decisions/mcp`, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...(authorization ? { authorization } : {}) },
       body: JSON.stringify(initialize),
@@ -181,19 +181,19 @@ test("Jev endpoint shares hub authentication and exposes secret-free resources",
 
   const health = await (await originalFetch(`${baseUrl}/healthz`)).json();
   assert.equal(health.status, "ok");
-  assert.ok(health.modules.includes("jev"));
+  assert.ok(health.modules.includes("decisions"));
 
-  const readme = await originalFetch(`${baseUrl}/jev/README.md`);
+  const readme = await originalFetch(`${baseUrl}/decisions/README.md`);
   const readmeText = await readme.text();
   assert.equal(readme.status, 200);
-  assert.match(readmeText, /aravind_jev_decisions/);
-  assert.match(readmeText, /typesafe\/jev-1\.13/);
+  assert.match(readmeText, /aravind_decision_maker/);
+  assert.match(readmeText, /cloudflare\/clef-flash/);
   assert.doesNotMatch(readmeText, new RegExp(firstOpenRouterKey));
 
-  const skill = await originalFetch(`${baseUrl}/jev/SKILL.md`);
+  const skill = await originalFetch(`${baseUrl}/decisions/SKILL.md`);
   const skillText = await skill.text();
   assert.equal(skill.status, 200);
-  assert.match(skillText, /^---\nname: aravind-jev-decisions/m);
+  assert.match(skillText, /^---\nname: aravind-decision-maker/m);
   assert.match(skillText, /make_decisions/);
   assert.doesNotMatch(skillText, new RegExp(firstOpenRouterKey));
 });
@@ -226,10 +226,10 @@ test("upstream errors become bounded MCP errors without leaking credentials", as
 });
 
 test("rejects malformed and oversized upstream decision responses", async () => {
-  const malformed = new JevClient({
+  const malformed = new DecisionClient({
     apiKeyFile: config.openRouterApiKeyFile,
     fetchFn: async () => Response.json({
-      model: "typesafe/jev-1.13-20260917",
+      model: "cloudflare/clef-flash",
       answers: { team: { type: "choice", choice: "undeclared", probabilities: { undeclared: 1 } } },
     }),
   });
@@ -238,7 +238,7 @@ test("rejects malformed and oversized upstream decision responses", async () => 
     /invalid response/,
   );
 
-  const oversized = new JevClient({
+  const oversized = new DecisionClient({
     apiKeyFile: config.openRouterApiKeyFile,
     fetchFn: async () => new Response("{}", { headers: { "content-length": String(2 * 1024 * 1024 + 1) } }),
   });
@@ -256,7 +256,7 @@ test("audit log ignores protocol traffic and unauthenticated tool calls", async 
   } finally {
     await client.close();
   }
-  const unauthenticated = await originalFetch(`${baseUrl}/jev/mcp`, {
+  const unauthenticated = await originalFetch(`${baseUrl}/decisions/mcp`, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
     body: JSON.stringify(toolCall(7, "make_decisions", { state: "hello", questions: { relevant: questions.is_bug } })),
@@ -268,8 +268,8 @@ test("audit log ignores protocol traffic and unauthenticated tool calls", async 
 test("durably records a successful make_decisions call with its exact arguments and full result", async () => {
   const upstream = {
     id: "gen-dec-audit",
-    model: "typesafe/jev-1.13-20260917",
-    provider: "TypeSafe",
+    model: "cloudflare/clef-flash",
+    provider: "Cloudflare",
     answers: { relevant: { type: "noul", noul: 0.91 } },
     usage: { input_tokens: 12, output_tokens: 3, cost: 0.000019992 },
   };
@@ -287,7 +287,7 @@ test("durably records a successful make_decisions call with its exact arguments 
   }
 
   auditLog.close();
-  const restarted = new JevAuditLog(config);
+  const restarted = new DecisionAuditLog(config);
   await restarted.initialize();
   try {
     const { calls, total } = restarted.list();
@@ -319,8 +319,8 @@ test("records requested and served models, provider, generation ID, token counts
     const { model } = JSON.parse(options.body);
     return Response.json({
       id: `gen-${model}`,
-      model: `${model.replace(/^~/, "")}-20260917`,
-      provider: "TypeSafe",
+      model: model,
+      provider: "Cloudflare",
       answers: { relevant: { type: "noul", noul: 0.5 } },
       usage: { input_tokens: 476, output_tokens: 70, total_tokens: 546, cost: 0.000019992 },
     });
@@ -328,25 +328,25 @@ test("records requested and served models, provider, generation ID, token counts
   const client = await mcpClient();
   try {
     await client.callTool({ name: "make_decisions", arguments: { state: "hello", questions: { relevant: questions.is_bug } } });
-    await client.callTool({ name: "make_decisions", arguments: { state: "hello", questions: { relevant: questions.is_bug }, model: "~typesafe/jev-latest" } });
+    await client.callTool({ name: "make_decisions", arguments: { state: "hello", questions: { relevant: questions.is_bug }, model: "cloudflare/clef-flash" } });
   } finally {
     await client.close();
   }
 
   const [latest, pinned] = auditLog.list().calls;
   assert.deepEqual(upstreamMetadata(pinned), {
-    requested_model: "typesafe/jev-1.13",
-    served_model: "typesafe/jev-1.13-20260917",
-    provider: "TypeSafe",
-    generation_id: "gen-typesafe/jev-1.13",
+    requested_model: "cloudflare/clef-flash",
+    served_model: "cloudflare/clef-flash",
+    provider: "Cloudflare",
+    generation_id: "gen-cloudflare/clef-flash",
     input_tokens: 476,
     output_tokens: 70,
     total_tokens: 546,
     cost_usd: 0.000019992,
   });
-  assert.equal(latest.requested_model, "~typesafe/jev-latest");
-  assert.equal(latest.served_model, "typesafe/jev-latest-20260917");
-  assert.equal(latest.generation_id, "gen-~typesafe/jev-latest");
+  assert.equal(latest.requested_model, "cloudflare/clef-flash");
+  assert.equal(latest.served_model, "cloudflare/clef-flash");
+  assert.equal(latest.generation_id, "gen-cloudflare/clef-flash");
 });
 
 test("records network and timeout failures with bounded messages and no error details", async () => {
@@ -420,7 +420,7 @@ test("records each tools/call item in a JSON-RPC batch separately", async () => 
   globalThis.fetch = async (url, options) => {
     if (!String(url).startsWith("https://openrouter.ai/")) return originalFetch(url, options);
     upstreamCalls += 1;
-    return Response.json({ model: "typesafe/jev-1.13-20260917", answers: { relevant: { type: "noul", noul: 0.4 } } });
+    return Response.json({ model: "cloudflare/clef-flash", answers: { relevant: { type: "noul", noul: 0.4 } } });
   };
   const overlongId = "r".repeat(300);
   const response = await postJsonRpc([
@@ -462,7 +462,7 @@ test("fails tool calls closed when their JSON-RPC ID is reused in the same reque
   globalThis.fetch = async (url, options) => {
     if (!String(url).startsWith("https://openrouter.ai/")) return originalFetch(url, options);
     upstreamCalls += 1;
-    return Response.json({ model: "typesafe/jev-1.13-20260917", answers: { relevant: { type: "noul", noul: 0.4 } } });
+    return Response.json({ model: "cloudflare/clef-flash", answers: { relevant: { type: "noul", noul: 0.4 } } });
   };
   const response = await postJsonRpc([
     toolCall(1, "make_decisions", { state: "first", questions: { relevant: questions.is_bug } }),
@@ -489,7 +489,7 @@ test("finalizes a call once when its client disconnects before the decision retu
     if (!String(url).startsWith("https://openrouter.ai/")) return originalFetch(url, options);
     markStarted();
     await released;
-    return Response.json({ id: "gen-late", model: "typesafe/jev-1.13-20260917", answers: { relevant: { type: "noul", noul: 0.8 } }, usage: { cost: 0.00001 } });
+    return Response.json({ id: "gen-late", model: "cloudflare/clef-flash", answers: { relevant: { type: "noul", noul: 0.8 } }, usage: { cost: 0.00001 } });
   };
   const controller = new AbortController();
   const request = postJsonRpc(toolCall(8, "make_decisions", { state: "hello", questions: { relevant: questions.is_bug } }), {}, controller.signal)
@@ -513,7 +513,7 @@ test("marks calls left pending by a stopped service as failures on the next star
   assert.equal(auditLog.list().calls[0].status, "pending");
   auditLog.close();
 
-  const restarted = new JevAuditLog(config);
+  const restarted = new DecisionAuditLog(config);
   await restarted.initialize();
   try {
     const [call] = restarted.list().calls;
@@ -551,7 +551,7 @@ test("does not call OpenRouter when the audit record cannot be written", async (
 test("still returns a completed decision when its audit record cannot be finalized", async () => {
   globalThis.fetch = async (url, options) => {
     if (!String(url).startsWith("https://openrouter.ai/")) return originalFetch(url, options);
-    return Response.json({ model: "typesafe/jev-1.13-20260917", answers: { relevant: { type: "noul", noul: 0.7 } } });
+    return Response.json({ model: "cloudflare/clef-flash", answers: { relevant: { type: "noul", noul: 0.7 } } });
   };
   auditLog.db.exec("CREATE TRIGGER reject_audit_update BEFORE UPDATE ON tool_calls BEGIN SELECT RAISE(ABORT, 'disk full'); END;");
   const client = await mcpClient();
@@ -591,8 +591,8 @@ test("keeps validated usage metadata from an upstream response that fails decisi
     if (!String(url).startsWith("https://openrouter.ai/")) return originalFetch(url, options);
     return Response.json({
       id: "gen-undeclared",
-      model: "typesafe/jev-1.13-20260917",
-      provider: "TypeSafe",
+      model: "cloudflare/clef-flash",
+      provider: "Cloudflare",
       answers: { team: { type: "choice", choice: "undeclared", probabilities: { undeclared: 1 } } },
       usage: { input_tokens: 40, output_tokens: 2, cost: 0.0000031 },
     });
@@ -610,9 +610,9 @@ test("keeps validated usage metadata from an upstream response that fails decisi
   assert.equal(call.error_message, "OpenRouter Decisions returned an invalid response");
   assert.equal(call.result_json, null);
   assert.deepEqual(upstreamMetadata(call), {
-    requested_model: "typesafe/jev-1.13",
-    served_model: "typesafe/jev-1.13-20260917",
-    provider: "TypeSafe",
+    requested_model: "cloudflare/clef-flash",
+    served_model: "cloudflare/clef-flash",
+    provider: "Cloudflare",
     generation_id: "gen-undeclared",
     input_tokens: 40,
     output_tokens: 2,
@@ -633,7 +633,7 @@ test("records missing or invalid usage values as unavailable instead of zero", a
     const usage = usages[next++];
     return Response.json({
       id: "gen-usage",
-      model: "typesafe/jev-1.13-20260917",
+      model: "cloudflare/clef-flash",
       provider: "p".repeat(300),
       answers: { relevant: { type: "noul", noul: 0.3 } },
       ...(usage ? { usage } : {}),
@@ -653,8 +653,8 @@ test("records missing or invalid usage values as unavailable instead of zero", a
   for (const call of calls) {
     assert.equal(call.status, "success");
     assert.deepEqual(upstreamMetadata(call), {
-      requested_model: "typesafe/jev-1.13",
-      served_model: "typesafe/jev-1.13-20260917",
+      requested_model: "cloudflare/clef-flash",
+      served_model: "cloudflare/clef-flash",
       provider: null,
       generation_id: "gen-usage",
       input_tokens: null,

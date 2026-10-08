@@ -90,8 +90,11 @@ const settingsSchema = z.object({
   accent_color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   show_progress: z.boolean().optional(),
 }).strict();
+const authenticationTypeSchema = z.enum(["anonymous", "self_report", "email_verified"])
+  .describe("How respondents identify themselves. anonymous: no name or email is collected. self_report: name and email are required but not checked. email_verified: name is self-reported and the email must be confirmed with a one-time code sent to it. Fixed for each revision.");
 const definitionSchema = {
   title: z.string().min(1).max(160),
+  authentication_type: authenticationTypeSchema.optional().describe("Defaults to anonymous for new questionnaires."),
   description: z.string().max(4000).optional().default(""),
   questions: z.array(questionSchema).min(1).max(200).describe("At most 200 questions across the entire tree and no more than eight nesting levels."),
   settings: settingsSchema.optional(),
@@ -119,12 +122,13 @@ async function withShare(store, questionnaire, revision) {
   };
 }
 
-export function createQuestionnaireMcpServer(store) {
+// sourceIp is the caller's address for per-IP verification limits; the default exists only for direct factory use in tests.
+export function createQuestionnaireMcpServer(store, { sourceIp = "mcp-direct" } = {}) {
   const server = new McpServer({
     name: "personal-questionnaire-collector",
     title: "Personal Questionnaire Collector",
-    version: "1.1.0",
-    description: "Creates revisioned questionnaires, accepts identified submissions, shares expiring signed answer links, and retrieves responses from SQLite.",
+    version: "1.2.0",
+    description: "Creates revisioned questionnaires with anonymous, self-reported, or email-verified respondents, shares expiring signed answer links, and retrieves responses from SQLite.",
   });
 
   server.registerTool("create_questionnaire", {
@@ -143,6 +147,7 @@ export function createQuestionnaireMcpServer(store) {
       description: z.string().max(4000).optional(),
       questions: z.array(questionSchema).min(1).max(200).describe("At most 200 questions across the entire tree and no more than eight nesting levels.").optional(),
       settings: settingsSchema.optional(),
+      authentication_type: authenticationTypeSchema.optional().describe("Mode for the new revision. Omit to keep the previous revision's mode."),
     },
     annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true, readOnlyHint: false },
   }, async ({ questionnaire_id, ...changes }) => toolResult(await withShare(store, store.update(questionnaire_id, changes))));
@@ -177,19 +182,52 @@ export function createQuestionnaireMcpServer(store) {
     await store.createSignedUrl(questionnaire_id, expires_in_seconds, revision),
   ));
 
+  server.registerTool("request_questionnaire_email_verification", {
+    title: "Request questionnaire email verification",
+    description: "For email_verified questionnaires only. Sends a six-digit code to the respondent's email and returns a response_id for the pending submission. The code expires in 10 minutes. Resending needs the same response_id, waits 60 seconds, and replaces the earlier code. The code is never returned here; the respondent must read it from their inbox (it may land in spam or junk).",
+    inputSchema: {
+      questionnaire_id: questionnaireId,
+      revision: z.number().int().min(1).optional().describe("Omit to answer the current revision"),
+      response_id: responseId.optional().describe("Pending response from an earlier request, to resend or change the email"),
+      respondent: respondentSchema,
+    },
+    annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true, readOnlyHint: false },
+  }, async ({ questionnaire_id, revision, response_id, respondent }) => toolResult(
+    await store.requestMcpEmailVerification({ questionnaireId: questionnaire_id, revision, responseId: response_id, respondent, sourceIp }),
+  ));
+
+  server.registerTool("verify_questionnaire_email", {
+    title: "Verify questionnaire email",
+    description: "Check the code the respondent received. Returns a single-use verification_proof bound to this response and email, valid for 30 minutes. Five wrong codes lock the code until a new one is requested.",
+    inputSchema: {
+      questionnaire_id: questionnaireId,
+      response_id: responseId,
+      email: z.string().trim().max(320).regex(RESPONDENT_EMAIL_PATTERN),
+      code: z.string().trim().regex(/^\d{6}$/).describe("Six-digit code from the verification email"),
+    },
+    annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false, readOnlyHint: false },
+  }, async ({ questionnaire_id, response_id, email, code }) => toolResult(
+    store.confirmMcpEmailVerification({ questionnaireId: questionnaire_id, responseId: response_id, email, code }),
+  ));
+
   server.registerTool("submit_questionnaire_response", {
     title: "Submit questionnaire response",
-    description: "Submit a complete response directly through MCP. Name and email are required for attribution. Omit revision to answer the current revision; this creates one final submission without a browser draft or edit token.",
+    description: "Submit a complete response directly through MCP. anonymous: omit respondent. self_report: respondent name and email are required. email_verified: first call request_questionnaire_email_verification and verify_questionnaire_email, then pass response_id, verification_proof, and the same respondent email. Omit revision to answer the current revision.",
     inputSchema: {
       questionnaire_id: questionnaireId,
       revision: z.number().int().min(1).optional(),
-      respondent: respondentSchema,
+      respondent: respondentSchema.optional(),
       answers: answersSchema,
+      response_id: responseId.optional().describe("email_verified only: response_id from request_questionnaire_email_verification"),
+      verification_proof: z.string().regex(/^[a-f0-9]{64}$/).optional().describe("email_verified only: proof from verify_questionnaire_email"),
     },
     annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false, readOnlyHint: false },
-  }, async ({ questionnaire_id, revision, respondent, answers }) => toolResult(
-    store.submitNewResponse(questionnaire_id, revision, respondent, answers),
-  ));
+  }, async ({ questionnaire_id, revision, respondent, answers, response_id, verification_proof }) => {
+    if (response_id !== undefined || verification_proof !== undefined) {
+      return toolResult(store.submitMcpVerifiedResponse({ questionnaireId: questionnaire_id, revision, responseId: response_id, respondent, answers, verificationProof: verification_proof }));
+    }
+    return toolResult(store.submitNewResponse(questionnaire_id, revision, respondent, answers));
+  });
 
   server.registerTool("set_questionnaire_status", {
     title: "Open or close questionnaire",
@@ -207,7 +245,7 @@ export function createQuestionnaireMcpServer(store) {
 
   server.registerTool("list_questionnaire_responses", {
     title: "List questionnaire responses",
-    description: "List metadata and respondent attribution for draft or submitted responses. Answer bodies and edit tokens are omitted; drafts and legacy submissions may have null respondent identity.",
+    description: "List metadata and respondent attribution for draft or submitted responses. identity_status is anonymous, self_reported, email_verified, legacy_missing (submitted before identity was collected), or pending (draft). Answer bodies and edit tokens are omitted.",
     inputSchema: {
       questionnaire_id: questionnaireId,
       revision: z.number().int().min(1).optional(),

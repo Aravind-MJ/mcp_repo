@@ -274,6 +274,27 @@ input[type="checkbox"] + .option-indicator { border-radius: 4px; }
 .submit-button { display: inline-flex; align-items: center; justify-content: center; gap: 20px; min-height: 50px; max-width: 100%; padding: 12px 22px; border: 1px solid var(--mauve); border-radius: 7px; background: var(--mauve); color: var(--crust); font-size: 14px; font-weight: 650; transition: background 160ms, border-color 160ms; }
 .submit-button:hover { background: var(--lavender); border-color: var(--lavender); }
 .submit-button:disabled { background: var(--surface0); color: var(--subtext1); border-color: var(--surface2); cursor: wait; }
+.identity-dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 28px; border: 1px solid var(--surface1); border-radius: 12px; background: var(--mantle); color: var(--text); }
+.identity-dialog::backdrop { background: rgb(17 17 27 / .72); }
+.identity-dialog h2 { margin: 0 0 10px; font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
+.identity-fields { display: grid; gap: 16px; margin: 18px 0; }
+.identity-fields label > span { display: block; margin-bottom: 7px; color: var(--subtext1); font-size: 12px; font-weight: 600; }
+.identity-fields b { color: var(--peach); }
+.dialog-copy { margin: 0 0 12px; color: var(--subtext1); font-size: 14px; }
+.dialog-notes { margin: 0 0 16px; padding-left: 18px; color: var(--subtext0); font-size: 13px; }
+.code-field { display: block; margin: 0 0 8px; }
+.code-field > span { display: block; margin-bottom: 7px; color: var(--subtext1); font-size: 12px; font-weight: 600; }
+.code-field input { max-width: 12ch; font: 20px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .2em; }
+.dialog-status { min-height: 1.4em; margin: 0 0 8px; color: var(--green); font-size: 12px; }
+.dialog-error { margin: 14px 0 0; padding: 10px 12px; border: 1px solid var(--red); border-radius: 6px; color: var(--red); font-size: 13px; }
+.dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+.dialog-actions.split { justify-content: space-between; align-items: center; }
+.dialog-actions.split > span { display: flex; flex-wrap: wrap; gap: 10px; }
+.dialog-button { min-height: 42px; padding: 9px 16px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--base); color: var(--text); font-size: 14px; }
+.dialog-button.primary { border-color: var(--mauve); background: var(--mauve); color: var(--crust); font-weight: 600; }
+.dialog-button:disabled { opacity: .6; cursor: default; }
+.dialog-link { min-height: 42px; padding: 9px 4px; border: 0; background: none; color: var(--lavender); font-size: 13px; text-decoration: underline; }
+.dialog-link:disabled { color: var(--subtext0); text-decoration: none; cursor: default; }
 .privacy-note { margin: 24px 0 0 48px; color: var(--subtext0); font-size: 11px; line-height: 1.7; }
 .completion { width: min(620px, 100% - var(--gutter) * 2); margin: 12vh auto; padding: clamp(24px, 5vw, 48px); border: 1px solid var(--surface1); border-radius: 12px; background: var(--mantle); }
 .completion-mark { display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 28px; border: 1px solid var(--green); border-radius: 50%; color: var(--green); font-size: 22px; }

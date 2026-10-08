@@ -249,12 +249,6 @@ const CLIENT_SCRIPT = String.raw`
     }
     return answers;
   }
-  function currentRespondent() {
-    return {
-      name: String(form.elements.namedItem("respondent_name")?.value || "").trim(),
-      email: String(form.elements.namedItem("respondent_email")?.value || "").trim(),
-    };
-  }
   function updateVisibility() {
     const answers = rawAnswers();
     const activeIds = new Set(activeQuestions(answers).map(function (question) { return question.id; }));
@@ -366,7 +360,11 @@ const CLIENT_SCRIPT = String.raw`
   }
   async function decode(response) {
     const body = await response.json().catch(function () { return {}; });
-    if (!response.ok) throw new Error(body.error || "The request could not be completed.");
+    if (!response.ok) {
+      const error = new Error(body.error || "The request could not be completed.");
+      error.status = response.status;
+      throw error;
+    }
     return body;
   }
   async function ensureDraft() {
@@ -549,6 +547,167 @@ const CLIENT_SCRIPT = String.raw`
       updateProgress(); scheduleSave();
     });
   }
+  const authenticationType = definition.authentication_type || "anonymous";
+  const identityDialog = document.getElementById("identity-dialog");
+  const identityForm = document.getElementById("identity-form");
+  const identityError = document.getElementById("identity-error");
+  const identityStatus = document.getElementById("identity-status");
+  const resendButton = document.getElementById("resend-code");
+  let verified = null;
+  let sentTo = "";
+  let resendTimer = null;
+  function setSubmitBusy(busy) {
+    submitButton.disabled = busy;
+    submitButton.textContent = busy ? "Submitting…" : definition.settings.submit_label;
+  }
+  async function prepareDraft() {
+    clearTimeout(saveTimer);
+    if (saving) await saving;
+    await ensureDraft();
+    if (dirty) await save({ force: true });
+  }
+  async function finalSubmit(extra) {
+    await prepareDraft();
+    const result = await decode(await fetch(api("/responses/" + draft.response_id + "/submit"), {
+      method: "POST", headers: requestHeaders(), body: JSON.stringify(Object.assign({ answers: currentAnswers(), version: draft.version }, extra)),
+    }));
+    sessionRemove(storageKey); dirty = false;
+    if (identityDialog && identityDialog.open) identityDialog.close();
+    document.getElementById("questionnaire-shell").hidden = true;
+    const completion = document.getElementById("completion-screen");
+    completion.hidden = false; completion.focus();
+    window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    setStatus("Response submitted", "saved");
+    return result;
+  }
+  function identityValue(name) { return String(identityForm.elements.namedItem(name).value || "").trim(); }
+  function respondentValue() { return { name: identityValue("respondent_name"), email: identityValue("respondent_email") }; }
+  function setIdentityError(message) {
+    identityError.textContent = message || "";
+    identityError.hidden = !message;
+  }
+  function setIdentityStatus(message) { if (identityStatus) identityStatus.textContent = message || ""; }
+  function showStep(step) {
+    for (const section of identityForm.querySelectorAll("[data-step]")) section.hidden = section.dataset.step !== step;
+    const focusTarget = identityForm.querySelector('[data-step="' + step + '"] input');
+    if (focusTarget) focusTarget.focus();
+  }
+  function setDialogBusy(busy) {
+    for (const button of identityForm.querySelectorAll("button[data-busy-label]")) {
+      if (!button.dataset.idleLabel) button.dataset.idleLabel = button.textContent;
+      button.disabled = busy;
+      button.textContent = busy ? button.dataset.busyLabel : button.dataset.idleLabel;
+    }
+    if (!busy && resendTimer) resendButton.disabled = true;
+  }
+  function startResendCountdown(seconds) {
+    clearInterval(resendTimer);
+    let remaining = seconds;
+    const tick = function () {
+      if (remaining <= 0) {
+        clearInterval(resendTimer); resendTimer = null;
+        resendButton.disabled = false; resendButton.textContent = "Resend code";
+        return;
+      }
+      resendButton.disabled = true;
+      resendButton.textContent = "Resend code in " + remaining + "s";
+      remaining -= 1;
+    };
+    tick();
+    resendTimer = setInterval(tick, 1000);
+  }
+  function handleSubmitError(error) {
+    const id = String(error.message).split(":", 1)[0];
+    if (questionById.has(id)) {
+      identityDialog.close();
+      setSubmitBusy(false);
+      showError(error.message);
+      return;
+    }
+    setIdentityError(error.message);
+  }
+  function openIdentityDialog() {
+    setIdentityError("");
+    if (!identityDialog.open) identityDialog.showModal();
+    showStep(verified || sentTo ? "code" : "identity");
+    if (!verified && !sentTo) identityForm.elements.namedItem("respondent_name").focus();
+  }
+  async function sendCode() {
+    if (!identityForm.elements.namedItem("respondent_name").reportValidity() || !identityForm.elements.namedItem("respondent_email").reportValidity()) return;
+    const respondent = respondentValue();
+    setIdentityError(""); setDialogBusy(true);
+    try {
+      await prepareDraft();
+      const sent = await decode(await fetch(api("/responses/" + draft.response_id + "/verification"), {
+        method: "POST", headers: requestHeaders(), body: JSON.stringify({ respondent: respondent }),
+      }));
+      const resent = sentTo === sent.email;
+      sentTo = sent.email; verified = null;
+      identityForm.elements.namedItem("verification_code").value = "";
+      for (const target of identityForm.querySelectorAll("[data-destination]")) target.textContent = sent.email;
+      setIdentityStatus(resent ? "We queued a new verification email. Earlier codes no longer work." : "");
+      showStep("code");
+      startResendCountdown(Math.max(1, Math.round((Date.parse(sent.resend_available_at) - Date.now()) / 1000)) || 60);
+    } catch (error) {
+      setIdentityError(error.message);
+    } finally {
+      setDialogBusy(false);
+    }
+  }
+  if (identityForm) {
+    // Enter submits the visible step's primary action, never the first (Cancel) button in tree order.
+    identityForm.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter" || event.target.tagName !== "INPUT") return;
+      event.preventDefault();
+      const primary = identityForm.querySelector("[data-step]:not([hidden]) .dialog-button.primary");
+      if (primary && !primary.disabled) primary.click();
+    });
+    identityForm.addEventListener("submit", async function (event) {
+      event.preventDefault();
+      const action = event.submitter ? event.submitter.value : "";
+      if (action === "cancel") { identityDialog.close(); return; }
+      if (action === "change-email") {
+        sentTo = ""; verified = null; setIdentityStatus(""); setIdentityError("");
+        showStep("identity");
+        identityForm.elements.namedItem("respondent_email").select();
+        return;
+      }
+      if (authenticationType === "self_report") {
+        if (!identityForm.reportValidity()) return;
+        setIdentityError(""); setDialogBusy(true);
+        try { await finalSubmit({ respondent: respondentValue() }); }
+        catch (error) { handleSubmitError(error); }
+        finally { setDialogBusy(false); }
+        return;
+      }
+      if (action === "send-code" || action === "resend-code") { await sendCode(); return; }
+      if (action === "verify") {
+        const codeInput = identityForm.elements.namedItem("verification_code");
+        if (!verified && !codeInput.reportValidity()) return;
+        setIdentityError(""); setDialogBusy(true);
+        try {
+          await prepareDraft();
+          if (!verified) {
+            const confirmed = await decode(await fetch(api("/responses/" + draft.response_id + "/verification/confirm"), {
+              method: "POST", headers: requestHeaders(), body: JSON.stringify({ email: sentTo, code: codeInput.value.trim() }),
+            }));
+            verified = { email: confirmed.email, proof: confirmed.verification_proof };
+          }
+          await finalSubmit({ respondent: { name: identityValue("respondent_name"), email: verified.email }, verification_proof: verified.proof });
+        } catch (error) {
+          handleSubmitError(error);
+        } finally {
+          setDialogBusy(false);
+        }
+      }
+    });
+    identityDialog.addEventListener("close", function () {
+      if (document.getElementById("completion-screen").hidden) {
+        setSubmitBusy(false);
+        setStatus(dirty ? "Unsaved changes" : "Draft kept — submit when ready", dirty ? "dirty" : "saved");
+      }
+    });
+  }
   form.addEventListener("input", function () { updateVisibility(); clearErrors(); validateSelections(); updateProgress(); scheduleSave(); });
   form.addEventListener("change", function () { updateVisibility(); clearErrors(); validateSelections(); updateProgress(); scheduleSave(); });
   form.addEventListener("submit", async function (event) {
@@ -560,24 +719,16 @@ const CLIENT_SCRIPT = String.raw`
       if (firstInvalid) firstInvalid.focus();
       return;
     }
-    submitButton.disabled = true; submitButton.textContent = "Submitting…";
-    try {
-      clearTimeout(saveTimer);
-      if (saving) await saving;
-      await ensureDraft();
-      const result = await decode(await fetch(api("/responses/" + draft.response_id + "/submit"), {
-        method: "POST", headers: requestHeaders(), body: JSON.stringify({ answers: currentAnswers(), respondent: currentRespondent(), version: draft.version }),
-      }));
-      sessionRemove(storageKey); dirty = false;
-      document.getElementById("questionnaire-shell").hidden = true;
-      const completion = document.getElementById("completion-screen");
-      completion.hidden = false; completion.focus();
-      window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-      setStatus("Response submitted", "saved");
-      return result;
-    } catch (error) {
-      showError(error.message); submitButton.disabled = false; submitButton.textContent = definition.settings.submit_label;
+    if (authenticationType === "anonymous") {
+      setSubmitBusy(true);
+      try {
+        await finalSubmit({});
+      } catch (error) {
+        showError(error.message); setSubmitBusy(false);
+      }
+      return;
     }
+    openIdentityDialog();
   });
   window.addEventListener("online", function () { if (dirty) save().catch(function () {}); });
   window.addEventListener("offline", function () { setStatus("Offline — changes pending", "error"); });
@@ -676,8 +827,51 @@ function renderDescription(description) {
   return `<details class="introduction"><summary><span class="document-description hero-description">${text}</span><span class="description-toggle"><span class="read-more">Read full introduction</span><span class="read-less">Collapse introduction</span><span aria-hidden="true"> ↕</span></span></summary></details>`;
 }
 
+const SUBMIT_COPY = {
+  anonymous: "Your answers are saved to the server while you are online. This questionnaire is anonymous: no name or email is collected.",
+  self_report: "Your answers are saved to the server while you are online, without your identity. You will confirm your name and email when you submit.",
+  email_verified: "Your answers are saved to the server while you are online, without your identity. When you submit, you will confirm your name and verify your email with a one-time code.",
+};
+const PRIVACY_COPY = {
+  anonymous: "No account is required. Your response is not linked to a name or email unless you type one into an answer.",
+  self_report: "No account is required. The name and email you enter at submission are stored with your answers so the questionnaire owner can identify your response.",
+  email_verified: "No account is required. The name you enter and your verified email are stored with your answers so the questionnaire owner can identify your response.",
+};
+
+function renderIdentityDialog(questionnaire, mode) {
+  if (mode === "anonymous") return "";
+  const verifiedMode = mode === "email_verified";
+  const submitLabel = escapeHtml(questionnaire.settings.submit_label);
+  const identityStep = `<div data-step="identity">
+      <div class="identity-fields"><label><span>Name <b aria-hidden="true">*</b></span><input class="text-control" type="text" name="respondent_name" autocomplete="name" maxlength="160" required></label><label><span>Email <b aria-hidden="true">*</b></span><input class="text-control" type="email" name="respondent_email" autocomplete="email" inputmode="email" maxlength="320" required></label></div>
+      <div class="dialog-actions"><button type="submit" class="dialog-button" value="cancel" formnovalidate>Cancel</button>${verifiedMode
+        ? `<button type="submit" class="dialog-button primary" value="send-code" data-busy-label="Sending…">Send code</button>`
+        : `<button type="submit" class="dialog-button primary" value="submit" data-busy-label="Submitting…">${submitLabel}</button>`}</div>
+    </div>`;
+  const codeStep = verifiedMode ? `<div data-step="code" hidden>
+      <p class="dialog-copy">We queued a verification email to <strong data-destination></strong>. Our mail provider accepted it, but delivery is not guaranteed.</p>
+      <ul class="dialog-notes"><li>Email can take a few minutes to arrive.</li><li>If you don't see it, check your spam or junk folder.</li><li>The code expires in 10 minutes and works once.</li></ul>
+      <label class="code-field"><span>Verification code</span><input class="text-control" type="text" name="verification_code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></label>
+      <p class="dialog-status" id="identity-status" role="status" aria-live="polite"></p>
+      <div class="dialog-actions split"><span><button type="submit" class="dialog-link" value="change-email" formnovalidate>Change email</button><button type="submit" class="dialog-link" id="resend-code" value="resend-code" formnovalidate disabled>Resend code</button></span><span><button type="submit" class="dialog-button" value="cancel" formnovalidate>Cancel</button><button type="submit" class="dialog-button primary" value="verify" data-busy-label="Submitting…">Verify and submit</button></span></div>
+    </div>` : "";
+  const intro = verifiedMode
+    ? "Your name is shown to the questionnaire owner as you enter it. We will email you a code to confirm the address."
+    : "The questionnaire owner sees this name and email with your answers. They are not checked.";
+  return `<dialog id="identity-dialog" class="identity-dialog" aria-labelledby="identity-title" aria-describedby="identity-intro">
+  <form id="identity-form" method="dialog" novalidate>
+    <h2 id="identity-title">${verifiedMode ? "Verify your email to submit" : "Confirm who is submitting"}</h2>
+    <p class="dialog-copy" id="identity-intro">${intro} Cancelling keeps your answers.</p>
+    ${identityStep}
+    ${codeStep}
+    <p class="dialog-error" id="identity-error" role="alert" hidden></p>
+  </form>
+</dialog>`;
+}
+
 export function renderQuestionnaire(questionnaire, nonce) {
   const closed = questionnaire.status !== "open";
+  const mode = ["anonymous", "self_report", "email_verified"].includes(questionnaire.authentication_type) ? questionnaire.authentication_type : "anonymous";
   // Custom branding is decorative only. Interactive colors always retain Mocha contrast.
   const accent = /^#[0-9a-f]{6}$/i.test(questionnaire.settings.accent_color || "")
     ? questionnaire.settings.accent_color : "#cba6f7";
@@ -740,10 +934,10 @@ export function renderQuestionnaire(questionnaire, nonce) {
         <form id="questionnaire-form" method="post" novalidate>
           <fieldset${closed ? " disabled" : ' id="questionnaire-fields" disabled'}>
             ${questionnaire.questions.map((question, index) => renderQuestion(question, index)).join("")}
-            ${closed ? "" : `<div class="submit-panel"><div class="submit-kicker" id="respondent-title">Who is submitting?</div><p>Your answers are saved to the server while you are online and autosave without identity. Your identity is attached only when you submit.</p><div class="respondent-fields" role="group" aria-labelledby="respondent-title"><label><span>Name <b aria-hidden="true">*</b></span><input class="text-control" type="text" name="respondent_name" autocomplete="name" maxlength="160" required></label><label><span>Email <b aria-hidden="true">*</b></span><input class="text-control" type="email" name="respondent_email" autocomplete="email" inputmode="email" maxlength="320" required></label></div><button class="submit-button" id="submit-response" type="submit">${escapeHtml(questionnaire.settings.submit_label)}<span aria-hidden="true">↗</span></button></div>`}
+            ${closed ? "" : `<div class="submit-panel"><div class="submit-kicker">Ready to send?</div><p>${SUBMIT_COPY[mode]}</p><button class="submit-button" id="submit-response" type="submit">${escapeHtml(questionnaire.settings.submit_label)}<span aria-hidden="true">↗</span></button></div>`}
           </fieldset>
         </form>
-        <p class="privacy-note">No account is required. Your submitted name and email are stored with your answers so the questionnaire owner can identify your response.</p>
+        <p class="privacy-note">${PRIVACY_COPY[mode]}</p>
       </div>
     </div>
     <section id="completion-screen" class="completion" tabindex="-1" hidden aria-labelledby="completion-title">
@@ -753,6 +947,7 @@ export function renderQuestionnaire(questionnaire, nonce) {
       <p>${escapeHtml(questionnaire.settings.completion_message)}</p>
     </section>
   </main>
+  ${closed ? "" : renderIdentityDialog(questionnaire, mode)}
   <script type="application/json" id="questionnaire-data">${safeJson(questionnaire)}</script>
   <script nonce="${nonce}">${CLIENT_SCRIPT}</script>
 </body>

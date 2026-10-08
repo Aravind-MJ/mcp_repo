@@ -186,13 +186,13 @@ finish() {
 
 TOTAL_STAGES=2
 
-banner "Jev through OpenRouter"
+banner "Decision through OpenRouter"
 
 stage "OpenRouter: create or select an API key"
 say "This key stays on the MCP host and is never written to the repository or Hermes config."
 open_url "https://openrouter.ai/settings/keys"
 step "Create a key for this MCP, or choose the existing key you want it to use."
-step "Ensure the OpenRouter account has credits available for typesafe/jev-1.13."
+step "Ensure the OpenRouter account has credits available for cloudflare/clef-flash."
 ask_secret OPENROUTER_API_KEY "Paste the OpenRouter API key:"
 if [[ -z "$OPENROUTER_API_KEY" ]]; then
   warn "the key cannot be empty"
@@ -214,8 +214,8 @@ printf '%s\n' "$OPENROUTER_API_KEY" > "$TEMP_KEY"
 printf 'Authorization: Bearer %s\n' "$OPENROUTER_API_KEY" > "$AUTH_HEADER"
 chmod 600 "$TEMP_KEY" "$AUTH_HEADER" "$VERIFY_RESPONSE"
 
-say "Verifying this credential with one small Jev decision before replacing the installed key."
-VERIFY_BODY='{"model":"typesafe/jev-1.13","state":"The service is online.","questions":{"is_online":{"type":"noul","instructions":"Does the state explicitly say the service is online?","criteria":{"true":"The state explicitly says it is online.","false":"The state does not say it is online."}}}}'
+say "Verifying this credential with one small Decision decision before replacing the installed key."
+VERIFY_BODY='{"model":"cloudflare/clef-flash","state":"The service is online.","questions":{"is_online":{"type":"noul","instructions":"Does the state explicitly say the service is online?","criteria":{"true":"The state explicitly says it is online.","false":"The state does not say it is online."}}}}'
 HTTP_STATUS=$(printf '%s' "$VERIFY_BODY" | curl -sS --max-time 30 \
   --output "$VERIFY_RESPONSE" --write-out '%{http_code}' \
   --header "@$AUTH_HEADER" --header 'Content-Type: application/json' \
@@ -228,10 +228,10 @@ if [[ "$HTTP_STATUS" != "200" ]] || ! node -e '
   const body = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   if (body?.answers?.is_online?.type !== "noul" || typeof body.answers.is_online.noul !== "number") process.exit(1);
 ' "$VERIFY_RESPONSE" >/dev/null 2>&1; then
-  warn "OpenRouter rejected the key or Jev request (HTTP $HTTP_STATUS); the existing installed key was not changed"
+  warn "OpenRouter rejected the key or Decision request (HTTP $HTTP_STATUS); the existing installed key was not changed"
   exit 1
 fi
-note "OpenRouter accepted the credential and returned a typed Jev answer"
+note "OpenRouter accepted the credential and returned a typed Decision answer"
 
 mv -f "$TEMP_KEY" "$KEY_FILE"
 chmod 600 "$KEY_FILE"
@@ -242,12 +242,12 @@ note "installed the verified key at $KEY_FILE with mode 0600"
 
 HEALTH_URL="${MCP_HUB_HEALTH_URL:-http://127.0.0.1:4330/healthz}"
 HEALTH=$(curl -fsS --max-time 2 "$HEALTH_URL" 2>/dev/null || true)
-if [[ "$HEALTH" != *'"status":"ok"'* || "$HEALTH" != *'"jev"'* ]]; then
-  warn "the key is installed, but the running service does not report Jev at $HEALTH_URL"
+if [[ "$HEALTH" != *'"status":"ok"'* || "$HEALTH" != *'"decisions"'* ]]; then
+  warn "the key is installed, but the running service does not report Decision at $HEALTH_URL"
   warn "deploy/restart the current MCP hub code, then re-run this wizard to verify the complete path"
   exit 1
 fi
-note "the running MCP hub reports the Jev module ready; no restart was needed"
+note "the running MCP hub reports the Decision module ready; no restart was needed"
 note "re-run this wizard whenever you rotate the OpenRouter key"
 
 finish

@@ -1,6 +1,6 @@
 # Adding another MCP module
 
-The hub reserves one top-level path per module. Artifact owns `/artifact`, Questionnaire owns `/questionnaire`, Jev owns `/jev`, and a future module named `example` should own `/example` with its Streamable HTTP endpoint at `/example/mcp`.
+The hub reserves one top-level path per module. Artifact owns `/artifact`, Questionnaire owns `/questionnaire`, Decision owns `/decisions`, and a future module named `example` should own `/example` with its Streamable HTTP endpoint at `/example/mcp`.
 
 1. Create `src/<module>/mcp.js` with a factory returning a fresh `McpServer` per request.
 2. Put domain/storage logic under `src/<module>/`; do not couple it to Artifact storage.

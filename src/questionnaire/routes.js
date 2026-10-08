@@ -77,6 +77,7 @@ function publicQuestionnaire(questionnaire) {
     description: questionnaire.description,
     questions: questionnaire.questions,
     settings: questionnaire.settings,
+    authentication_type: questionnaire.authentication_type,
   };
 }
 
@@ -85,6 +86,8 @@ export function mountQuestionnaireRoutes(app, store, config) {
   const pages = ["/questionnaire/:questionnaireId", "/questionnaire/:questionnaireId/r/:revision"];
   const responses = ["/questionnaire/:questionnaireId/responses", "/questionnaire/:questionnaireId/r/:revision/responses"];
   const responseItems = ["/questionnaire/:questionnaireId/responses/:responseId", "/questionnaire/:questionnaireId/r/:revision/responses/:responseId"];
+  const verifications = ["/questionnaire/:questionnaireId/responses/:responseId/verification", "/questionnaire/:questionnaireId/r/:revision/responses/:responseId/verification"];
+  const confirmations = ["/questionnaire/:questionnaireId/responses/:responseId/verification/confirm", "/questionnaire/:questionnaireId/r/:revision/responses/:responseId/verification/confirm"];
   const submissions = ["/questionnaire/:questionnaireId/responses/:responseId/submit", "/questionnaire/:questionnaireId/r/:revision/responses/:responseId/submit"];
 
   app.get(["/questionnaire", "/questionnaire/"], (request, response) => {
@@ -183,7 +186,44 @@ export function mountQuestionnaireRoutes(app, store, config) {
         request.body?.answers,
         request.body?.respondent,
         request.body?.version,
+        { verificationProof: request.body?.verification_proof },
       );
+      baseHeaders(response);
+      response.json(result);
+    } catch (error) { next(error); }
+  });
+
+  app.post(verifications, answerJson, async (request, response, next) => {
+    try {
+      requireSameOrigin(request, config);
+      requireJson(request);
+      const questionnaire = await authorizedQuestionnaire(request, store, config, { responseRequest: true });
+      const result = await store.requestEmailVerification({
+        questionnaireId: questionnaire.questionnaire_id,
+        revision: questionnaire.revision,
+        responseId: request.params.responseId,
+        editToken: request.get("x-questionnaire-edit-token"),
+        respondent: request.body?.respondent,
+        sourceIp: request.ip,
+      });
+      baseHeaders(response);
+      response.status(202).json(result);
+    } catch (error) { next(error); }
+  });
+
+  app.post(confirmations, answerJson, async (request, response, next) => {
+    try {
+      requireSameOrigin(request, config);
+      requireJson(request);
+      const questionnaire = await authorizedQuestionnaire(request, store, config, { responseRequest: true });
+      const result = store.confirmEmailVerification({
+        questionnaireId: questionnaire.questionnaire_id,
+        revision: questionnaire.revision,
+        responseId: request.params.responseId,
+        editToken: request.get("x-questionnaire-edit-token"),
+        email: request.body?.email,
+        code: request.body?.code,
+      });
       baseHeaders(response);
       response.json(result);
     } catch (error) { next(error); }

@@ -1,6 +1,6 @@
 # Personal MCP Hub
 
-A Node.js personal MCP service hosting multiple MCP modules under one domain. It provides authenticated HTML artifacts, questionnaire management with signed public answer links, and authenticated Jev structured decisions through OpenRouter.
+A Node.js personal MCP service hosting multiple MCP modules under one domain. It provides authenticated HTML artifacts, questionnaire management with signed public answer links, and authenticated structured decisions with Cloudflare Clef Flash through OpenRouter.
 
 ## Route layout
 
@@ -20,15 +20,17 @@ A Node.js personal MCP service hosting multiple MCP modules under one domain. It
 | `GET /questionnaire/<id>/r/<revision>?expires=...&signature=...` | Signed URL | Render one exact questionnaire revision |
 | `POST /questionnaire/<id>/r/<revision>/responses` | Signed URL | Create one anonymous draft |
 | `GET/PATCH /questionnaire/<id>/r/<revision>/responses/<response-id>` | Signed URL + edit token | Resume or autosave a draft |
-| `POST /questionnaire/<id>/r/<revision>/responses/<response-id>/submit` | Signed URL + edit token | Validate, identify, and finalize one response |
+| `POST /questionnaire/<id>/r/<revision>/responses/<response-id>/verification` | Signed URL + edit token | Email a one-time code (`email_verified` mode only) |
+| `POST /questionnaire/<id>/r/<revision>/responses/<response-id>/verification/confirm` | Signed URL + edit token | Check the code and return a single-use proof |
+| `POST /questionnaire/<id>/r/<revision>/responses/<response-id>/submit` | Signed URL + edit token | Validate, apply the identity mode, and finalize one response |
 | `GET /questionnaire` | Public | Non-indexed module landing page |
 | `GET /questionnaire/README.md` | Public | Secret-free installation and schema guide |
 | `GET /questionnaire/SKILL.md` | Public | Companion agent skill |
-| `POST /jev/mcp` | Shared bearer secret | Jev typed decisions through OpenRouter |
-| `GET /jev` | Public | Non-indexed module landing page |
-| `GET /jev/README.md` | Public | Secret-free installation and schema guide |
-| `GET /jev/SKILL.md` | Public | Companion agent skill |
-| `GET /jev/logs` | Caddy Basic Auth | Private Jev call log with arguments, results, failures, and costs |
+| `POST /decisions/mcp` | Shared bearer secret | Decision typed decisions through OpenRouter |
+| `GET /decisions` | Public | Non-indexed module landing page |
+| `GET /decisions/README.md` | Public | Secret-free installation and schema guide |
+| `GET /decisions/SKILL.md` | Public | Companion agent skill |
+| `GET /decisions/logs` | Caddy Basic Auth | Private Decision call log with arguments, results, failures, and costs |
 | `GET /questionnaires` | Caddy Basic Auth | Private questionnaire index with links, status, and response counts |
 | `GET /questionnaires/<id>/responses[/<response-id>]` | Caddy Basic Auth | Inspect collected response metadata and answers |
 | `POST /questionnaires/<id>/{sign,status,delete}` | Caddy Basic Auth + action-scoped CSRF token | Mint links, open/close, or permanently delete from the index |
@@ -44,8 +46,8 @@ Public installation URLs:
 - `https://mcp.aravindmj.in/artifact/SKILL.md`
 - `https://mcp.aravindmj.in/questionnaire/README.md`
 - `https://mcp.aravindmj.in/questionnaire/SKILL.md`
-- `https://mcp.aravindmj.in/jev/README.md`
-- `https://mcp.aravindmj.in/jev/SKILL.md`
+- `https://mcp.aravindmj.in/decisions/README.md`
+- `https://mcp.aravindmj.in/decisions/SKILL.md`
 
 Use the local MCP name `aravind_html_publisher` in other harnesses. The companion skill distinguishes this externally hosted publisher from Claude's built-in Artifacts feature: public/shareable-link requests use this MCP; Claude-native in-chat canvas requests use the built-in feature.
 
@@ -86,23 +88,24 @@ The proxy must preserve the query string, Authorization, Content-Type, Range, an
 - `update_questionnaire` — creates a new immutable revision while preserving prior links and responses.
 - `get_questionnaire` / `list_questionnaires` — retrieves definitions, status, and response counts.
 - `get_questionnaire_signed_url` — mints an exact-revision link for 60 seconds through one year.
-- `submit_questionnaire_response` — atomically submits complete answers with respondent name and email through MCP.
+- `submit_questionnaire_response` — atomically submits complete answers through MCP, with the identity the questionnaire's mode requires.
+- `request_questionnaire_email_verification` / `verify_questionnaire_email` — the one-time-code steps for `email_verified` questionnaires. The bearer token does not bypass them.
 - `set_questionnaire_status` — opens or closes response collection.
 - `delete_questionnaire` — removes every revision and response.
 - `list_questionnaire_responses` — lists bounded response metadata; `get_questionnaire_response` retrieves one answer body by ID.
 - `delete_questionnaire_response` — permanently removes one response.
 
-Supported types: short/long text, email, URL, phone, number, date, time, date-time, single/multiple choice, dropdown, yes/no, consent, rating, scale, ranking, and matrix. The answering UI is responsive, keyboard accessible, progress-aware, dark-mode aware, and autosaves incomplete anonymous drafts before strict final validation and respondent attribution.
+Supported types: short/long text, email, URL, phone, number, date, time, date-time, single/multiple choice, dropdown, yes/no, consent, rating, scale, ranking, and matrix. The answering UI is responsive, keyboard accessible, progress-aware, dark-mode aware, and autosaves incomplete identity-free drafts before strict final validation. Each revision has an `authentication_type` of `anonymous` (default), `self_report`, or `email_verified`; identity is collected in a dialog only after the answers validate. See `public/questionnaire-README.md` for the rules and `docs/QUESTIONNAIRE_EMAIL.md` for SMTP setup.
 
-## Jev tool
+## Decision tool
 
-- `make_decisions` — evaluates one text or structured state against independent `noul`, `choice`, and `score` questions in parallel through OpenRouter's Decisions API. It defaults to pinned `typesafe/jev-1.13`; `~typesafe/jev-latest` is available only for deliberate model drift.
+- `make_decisions` — evaluates one text or structured state against independent `noul`, `choice`, and `score` questions in parallel through OpenRouter's Decisions API. It supports `cloudflare/clef-flash` and `typesafe/jev-1.13` through OpenRouter. The protected log dashboard persists the default model. Calls that omit `model` follow that setting; explicit per-call overrides do not change it. The initial default is Clef Flash, and provider errors never trigger automatic fallback.
 
-The upstream OpenRouter key is read from `secrets/openrouter-api-key` inside the runtime directory on every call, so rotation takes effect without embedding it in source or client configuration. Use `scripts/setup-jev-openrouter.sh` to verify, install, or rotate it with hidden input, mode `0600`, and health verification; the running service picks it up without a restart.
+The upstream OpenRouter key is read from `secrets/openrouter-api-key` inside the runtime directory on every call, so rotation takes effect without embedding it in source or client configuration. Use `scripts/setup-decisions-openrouter.sh` to verify, install, or rotate it with hidden input, mode `0600`, and health verification; the running service picks it up without a restart.
 
-### Jev call log
+### Decision call log
 
-Node writes an audit record for every authenticated `tools/call` that reaches `POST /jev/mcp` before it makes any OpenRouter request. That includes unknown tool names, calls rejected by input validation, calls the MCP transport rejects, and each `tools/call` item in a JSON-RPC batch. It does not record `initialize`, `tools/list`, other protocol messages, or requests that fail bearer authentication.
+Node writes an audit record for every authenticated `tools/call` that reaches `POST /decisions/mcp` before it makes any OpenRouter request. That includes unknown tool names, calls rejected by input validation, calls the MCP transport rejects, and each `tools/call` item in a JSON-RPC batch. It does not record `initialize`, `tools/list`, other protocol messages, or requests that fail bearer authentication.
 
 Each record holds:
 
@@ -119,17 +122,17 @@ A call counts as successful only after OpenRouter returns a response that passes
 
 If the record cannot be written, the call returns a tool error and OpenRouter is not called. If the final write fails after OpenRouter answers, the caller still gets the result and the record stays pending. On startup, Node marks every pending record as a failure. The page flags a pending record older than the OpenRouter timeout plus 60 seconds as needing review. A JSON-RPC ID reused within one HTTP request makes responses unattributable, so Node records those calls as failures and does not run them.
 
-The private page is `https://mcp.aravindmj.in/jev/logs`. It shows total, successful, failed, and unfinished counts, the total cost, and pages of 25 calls, newest first. Each call has expandable request and result details. Failed calls carry a "Failed" badge with an icon, a highlighted card, and the failure reason. Node serves the page only when Caddy sets `X-Jev-Basic-Auth: 1` and returns 404 otherwise. The page uses a nonce-based CSP with no scripts, `no-store`, `noindex`, and frame denial, and it escapes all logged content. The public `/jev` landing page links to it, protected by the same HTTP Basic Auth as the page itself.
+The private page is `https://mcp.aravindmj.in/decisions/logs`, which redirects to `/artifacts/decisions/logs` inside the existing Basic-Auth-protected artifacts namespace. The model selector writes private `data/decisions/settings.json` atomically and is protected by trusted proxy authentication, a time-limited action-specific CSRF token, and same-origin checks. Existing audit history is migrated automatically from the retired module directory. It shows total, successful, failed, and unfinished counts, the total cost, and pages of 25 calls, newest first. Each call has expandable request and result details. Failed calls carry a "Failed" badge with an icon, a highlighted card, and the failure reason. Node serves the page only when Caddy sets `X-Artifact-Basic-Auth: 1` and returns 404 otherwise. The page uses a nonce-based CSP with no scripts, `no-store`, `noindex`, and frame denial, and it escapes all logged content. The public `/decisions` landing page links to it, protected by the same HTTP Basic Auth as the page itself.
 
-### Reverse-proxy requirements for the Jev call log
+### Reverse-proxy requirements for the Decision call log
 
-Update Caddy before deploying the Jev call log. Put `/jev/logs` and `/jev/logs/*` behind the existing Basic Auth, and inject `X-Jev-Basic-Auth: 1` only in that authenticated branch. Strip any client-provided `X-Jev-Basic-Auth` header in the public fallback proxy, as for the artifact and questionnaire markers. Until the public branch strips that header, anyone who can reach the host can send it and read every logged argument and result. No proxy configuration is stored or changed by this repository.
+Reuse the existing Caddy private artifacts branch. Keep `/artifacts/decisions/logs` and `/artifacts/decisions/logs/*` behind the existing Basic Auth, and inject `X-Artifact-Basic-Auth: 1` only in that authenticated branch. Strip any client-provided `X-Artifact-Basic-Auth` header in the public fallback proxy, as for the artifact and questionnaire markers. Until the public branch strips that header, anyone who can reach the host can send it and read every logged argument and result. No proxy configuration is stored or changed by this repository.
 
 ## Security model
 
 - Node binds only to `127.0.0.1:4330`; Caddy is the only public ingress.
-- Artifact, Questionnaire, and Jev MCP calls require the common bearer secret. The separate OpenRouter key used by Jev never leaves the server.
-- Jev call records are stored in `/data/mcp-hub/data/jev/audit.sqlite3` using WAL mode, full synchronization, and private filesystem permissions. They keep full arguments and results with no automatic retention limit.
+- Artifact, Questionnaire, and Decision MCP calls require the common bearer secret. The separate OpenRouter key used by Decision never leaves the server.
+- Decision call records are stored in `/data/mcp-hub/data/decisions/audit.sqlite3` using WAL mode, full synchronization, and private filesystem permissions. They keep full arguments and results with no automatic retention limit.
 - The shared secret is stored outside the repository at `/data/mcp-hub/secrets/shared-secret`, mode `0600`; its directory is `0700`.
 - The secret is read on every MCP request, allowing atomic rotation without restarting Node.
 - Secret comparison uses Node's constant-time `crypto.timingSafeEqual`.
@@ -168,10 +171,10 @@ MCP_HUB_RUNTIME_DIR=/data/mcp-hub node /data/mcp-hub/app/scripts/rotate-secret.j
 curl -fsS http://127.0.0.1:4330/healthz
 hermes mcp test aravind_html_publisher
 hermes mcp test aravind_questionnaires
-hermes mcp test aravind_jev_decisions
+hermes mcp test aravind_decision_maker
 ```
 
-The questionnaire SQLite database is persistent runtime state, not release content. Back up `/data/mcp-hub/data/questionnaire/questionnaires.sqlite3` with SQLite's online backup mechanism while the service is running, or stop the service and copy the database together with any `-wal` and `-shm` sidecars. Back up the Jev call log at `/data/mcp-hub/data/jev/audit.sqlite3` the same way. Never replace `/data/mcp-hub/data` during an application deployment.
+The questionnaire SQLite database is persistent runtime state, not release content. Back up `/data/mcp-hub/data/questionnaire/questionnaires.sqlite3` with SQLite's online backup mechanism while the service is running, or stop the service and copy the database together with any `-wal` and `-shm` sidecars. Back up the Decision call log at `/data/mcp-hub/data/decisions/audit.sqlite3` the same way. Never replace `/data/mcp-hub/data` during an application deployment.
 
 ### Ask an agent to update installed user-scope skills
 

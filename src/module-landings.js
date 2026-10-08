@@ -247,7 +247,9 @@ const questionnaireTools = [
   `<li class="tool"><code>get_questionnaire</code><p>Retrieve one definition and its response counts.</p></li>`,
   `<li class="tool"><code>list_questionnaires</code><p>List current definitions with status and response counts.</p></li>`,
   `<li class="tool"><code>get_questionnaire_signed_url</code><p>Mint a latest-revision or exact-revision answer link.</p></li>`,
-  `<li class="tool"><code>submit_questionnaire_response</code><p>Submit complete answers with respondent name and email directly through MCP.</p></li>`,
+  `<li class="tool"><code>submit_questionnaire_response</code><p>Submit complete answers through MCP, with identity as the questionnaire's mode requires.</p></li>`,
+  `<li class="tool"><code>request_questionnaire_email_verification</code><p>Email a one-time code for an email-verified response.</p></li>`,
+  `<li class="tool"><code>verify_questionnaire_email</code><p>Check the code and return a single-use submission proof.</p></li>`,
   `<li class="tool"><code>set_questionnaire_status</code><p>Open or close response collection.</p></li>`,
   `<li class="tool"><code>delete_questionnaire</code><p>Delete every revision and response for one questionnaire.</p></li>`,
   `<li class="tool"><code>list_questionnaire_responses</code><p>List bounded response metadata without answer bodies.</p></li>`,
@@ -366,7 +368,7 @@ export const QUESTIONNAIRE_LANDING_HTML = `<!doctype html>
       </section>
 
       <div class="fact-row" role="list" aria-label="Service facts">
-        <div class="fact" role="listitem"><span class="fact-label">Tool set</span><span class="fact-value">11 tools</span></div>
+        <div class="fact" role="listitem"><span class="fact-label">Tool set</span><span class="fact-value">13 tools</span></div>
         <div class="fact" role="listitem"><span class="fact-label">Recommended name</span><span class="fact-value">aravind_questionnaires</span></div>
         <div class="fact" role="listitem"><span class="fact-label">Answer access</span><span class="fact-value">Expiring signed links</span></div>
       </div>
@@ -414,18 +416,18 @@ export const QUESTIONNAIRE_LANDING_HTML = `<!doctype html>
 </body>
 </html>`;
 
-const jevTools = `<li class="tool"><code>make_decisions</code><p>Evaluate mixed yes/no, choice, and ordered-score questions against one shared state.</p></li>`;
+const decisionsTools = `<li class="tool"><code>make_decisions</code><p>Evaluate mixed yes/no, choice, and ordered-score questions against one shared state.</p></li>`;
 
-export const JEV_LANDING_HTML = `<!doctype html>
-<html lang="en" data-module="jev">
+export const DECISION_LANDING_HTML = `<!doctype html>
+<html lang="en" data-module="decisions">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#0b0c0f">
-  <meta name="description" content="Make fast typed semantic decisions with Jev through an authenticated MCP.">
-  <link rel="icon" href="/jev.svg" type="image/svg+xml">
-  <title>Jev Structured Decisions · Personal MCP Hub</title>
+  <meta name="description" content="Make fast typed semantic decisions with Clef Flash through an authenticated MCP.">
+  <link rel="icon" href="/decisions.svg" type="image/svg+xml">
+  <title>Decision Maker · Personal MCP Hub</title>
   <style>${SHARED_STYLES}:root{--accent:#e7a8ff;--accent-soft:#25172b}</style>
 </head>
 <body>
@@ -433,58 +435,58 @@ export const JEV_LANDING_HTML = `<!doctype html>
   <div class="shell">
     <header class="site-header">
       <a class="hub-link" href="/">All MCP services</a>
-      <span class="module-id"><img src="/jev.svg" width="44" height="44" alt=""><span>Module 03<br>Decisions</span></span>
+      <span class="module-id"><img src="/decisions.svg" width="44" height="44" alt=""><span>Module 03<br>Decisions</span></span>
     </header>
     <main id="main-content">
       <section class="hero" aria-labelledby="page-title">
         <div>
-          <p class="eyebrow">Personal MCP Hub · Jev</p>
-          <h1 id="page-title">Jev Structured Decisions</h1>
-          <p class="lede">Turn text or structured state into bounded choices, ordered scores, and yes probabilities through TypeSafe Jev on OpenRouter.</p>
+          <p class="eyebrow">Personal MCP Hub · Decision</p>
+          <h1 id="page-title">Decision Maker</h1>
+          <p class="lede">Turn text or structured state into bounded choices, ordered scores, and yes probabilities through the model selected in the private log dashboard.</p>
         </div>
         <aside class="hero-aside" aria-label="Connection details">
           <span class="status">Bearer authentication required</span>
-          <div class="endpoint"><span>Streamable HTTP endpoint</span><code><strong>POST</strong>https://mcp.aravindmj.in/jev/mcp</code></div>
-          <div class="endpoint"><span>Dashboard · HTTP auth</span><a class="dashboard-link" href="/jev/logs">https://mcp.aravindmj.in/jev/logs</a></div>
+          <div class="endpoint"><span>Streamable HTTP endpoint</span><code><strong>POST</strong>https://mcp.aravindmj.in/decisions/mcp</code></div>
+          <div class="endpoint"><span>Dashboard · HTTP auth</span><a class="dashboard-link" href="/decisions/logs">https://mcp.aravindmj.in/decisions/logs</a></div>
           <div class="trust-note trust-note--warning" role="note">
             <p><strong>Two trust boundaries:</strong> MCP clients use the hub's shared bearer credential. The upstream OpenRouter key stays on the server and is never returned to clients.</p>
-            <p>State is processed by OpenRouter and TypeSafe. Type-safe outputs can still be wrong.</p>
+            <p>State is processed by OpenRouter and the selected Cloudflare or TypeSafe provider. Type-safe outputs can still be wrong.</p>
           </div>
-          <nav class="actions" aria-label="Jev Decisions resources">
-            <a class="action action--primary" href="/jev/README.md">Read installation guide</a>
-            <a class="action" href="/jev/SKILL.md">View companion skill</a>
+          <nav class="actions" aria-label="Decision Maker resources">
+            <a class="action action--primary" href="/decisions/README.md">Read installation guide</a>
+            <a class="action" href="/decisions/SKILL.md">View companion skill</a>
           </nav>
         </aside>
       </section>
 
       <div class="fact-row" role="list" aria-label="Service facts">
         <div class="fact" role="listitem"><span class="fact-label">Tool set</span><span class="fact-value">1 tool</span></div>
-        <div class="fact" role="listitem"><span class="fact-label">Recommended name</span><span class="fact-value">aravind_jev_decisions</span></div>
-        <div class="fact" role="listitem"><span class="fact-label">Default model</span><span class="fact-value">typesafe/jev-1.13</span></div>
+        <div class="fact" role="listitem"><span class="fact-label">Recommended name</span><span class="fact-value">aravind_decision_maker</span></div>
+        <div class="fact" role="listitem"><span class="fact-label">Models</span><span class="fact-value">Clef Flash · Jev 1.13</span></div>
       </div>
 
-      <section class="section" aria-labelledby="jev-flow-title">
+      <section class="section" aria-labelledby="decisions-flow-title">
         <p class="section-label">How it works</p>
         <div class="section-body">
-          <h2 id="jev-flow-title">Define the paths. Let Jev weigh them.</h2>
+          <h2 id="decisions-flow-title">Define the paths. Evaluate each allowed option.</h2>
           <ol class="flow">
             <li><h3>State</h3><p>Provide the smallest relevant text, object, or array for the decision.</p></li>
             <li><h3>Questions</h3><p>Declare independent noul, choice, or score judgments with concrete criteria.</p></li>
             <li><h3>Policy</h3><p>Use distributions and validated thresholds in code; escalate uncertain or costly cases.</p></li>
           </ol>
-          <div class="trust-note"><p><strong>Bounded, not infallible:</strong> Jev cannot emit an undeclared choice, but it can confidently choose the wrong declared option.</p></div>
+          <div class="trust-note"><p><strong>Bounded, not infallible:</strong> Clef Flash cannot emit an undeclared choice, but it can confidently choose the wrong declared option.</p></div>
         </div>
       </section>
 
-      <section class="section" aria-labelledby="jev-tools-title">
+      <section class="section" aria-labelledby="decisions-tools-title">
         <p class="section-label">Tool registry</p>
         <div class="section-body">
-          <h2 id="jev-tools-title">One request, many independent judgments.</h2>
-          <ul class="tools">${jevTools}</ul>
+          <h2 id="decisions-tools-title">One request, many independent judgments.</h2>
+          <ul class="tools">${decisionsTools}</ul>
         </div>
       </section>
     </main>
-    <footer class="site-footer"><p>Personal MCP Hub</p><p>mcp.aravindmj.in/jev</p></footer>
+    <footer class="site-footer"><p>Personal MCP Hub</p><p>mcp.aravindmj.in/decisions</p></footer>
   </div>
 </body>
 </html>`;

@@ -93,7 +93,7 @@ test("rejects unapproved Host headers before serving public or MCP routes", asyn
 });
 
 test("renders a secure, responsive questionnaire UI for every supported answer type", async () => {
-  const questionnaire = store.create({ title: "Product discovery", description: "Help us build the right thing.", questions, settings: { accent_color: "#ff5c35", completion_message: "You made our day." } });
+  const questionnaire = store.create({ authentication_type: "self_report", title: "Product discovery", description: "Help us build the right thing.", questions, settings: { accent_color: "#ff5c35", completion_message: "You made our day." } });
   const signed = await store.createSignedUrl(questionnaire.questionnaire_id, undefined, 1);
   const response = await fetch(localUrl(signed.url));
   assert.equal(response.status, 200);
@@ -177,7 +177,8 @@ test("renders a secure, responsive questionnaire UI for every supported answer t
   assert.match(html, /No account required/);
   assert.match(html, /name="respondent_name"/);
   assert.match(html, /name="respondent_email"/);
-  assert.match(html, /Your identity is attached only when you submit/);
+  assert.match(html, /You will confirm your name and email when you submit/);
+  assert.match(html, /<dialog id="identity-dialog"/);
   assert.match(html, /saved to the server while you are online/);
   assert.match(html, /<table class="matrix"/);
   assert.match(html, /You made our day/);
@@ -228,7 +229,7 @@ test("renders conditional children as accessible nested questions and clamps the
 });
 
 test("enforces nested branch requirements through public response APIs", async () => {
-  const questionnaire = store.create({
+  const questionnaire = store.create({ authentication_type: "self_report",
     title: "Nested response API",
     questions: [{
       id: "decision",
@@ -274,7 +275,7 @@ test("requires an unexpired exact-revision signature for pages and response APIs
 });
 
 test("creates, resumes, and autosaves anonymously, then requires identity to submit", async () => {
-  const questionnaire = store.create({ title: "Response flow", questions: [questions[0], questions[9]] });
+  const questionnaire = store.create({ authentication_type: "self_report", title: "Response flow", questions: [questions[0], questions[9]] });
   const signed = await store.createSignedUrl(questionnaire.questionnaire_id, undefined, 1);
   const createdResponse = await fetch(subresourceUrl(signed.url, "/responses"), { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
   assert.equal(createdResponse.status, 201);

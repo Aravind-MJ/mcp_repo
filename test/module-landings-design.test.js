@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ARTIFACT_LANDING_HTML, JEV_LANDING_HTML, QUESTIONNAIRE_LANDING_HTML } from "../src/module-landings.js";
+import { ARTIFACT_LANDING_HTML, DECISION_LANDING_HTML, QUESTIONNAIRE_LANDING_HTML } from "../src/module-landings.js";
 
 const pages = [
   {
@@ -27,28 +27,28 @@ const pages = [
     guide: "/questionnaire/README.md",
     skill: "/questionnaire/SKILL.md",
     serverName: "aravind_questionnaires",
-    toolCount: 11,
+    toolCount: 13,
     authCopy: "Bearer authentication required",
     dashboard: { href: "/questionnaires", text: "https://mcp.aravindmj.in/questionnaires" },
   },
   {
-    name: "jev",
-    html: JEV_LANDING_HTML,
-    title: "Jev Structured Decisions",
-    favicon: "/jev.svg",
-    mark: "/jev.svg",
-    endpoint: "/jev/mcp",
-    guide: "/jev/README.md",
-    skill: "/jev/SKILL.md",
-    serverName: "aravind_jev_decisions",
+    name: "decisions",
+    html: DECISION_LANDING_HTML,
+    title: "Decision Maker",
+    favicon: "/decisions.svg",
+    mark: "/decisions.svg",
+    endpoint: "/decisions/mcp",
+    guide: "/decisions/README.md",
+    skill: "/decisions/SKILL.md",
+    serverName: "aravind_decision_maker",
     toolCount: 1,
     authCopy: "Bearer authentication required",
-    dashboard: { href: "/jev/logs", text: "https://mcp.aravindmj.in/jev/logs" },
+    dashboard: { href: "/decisions/logs", text: "https://mcp.aravindmj.in/decisions/logs" },
   },
 ];
 
-const dashboardHref = /^\/(?:artifacts|questionnaires|jev\/logs)(?:[/?#]|$)/;
-const dashboardUrl = /(?:https?:\/\/)?mcp\.aravindmj\.in\/(?:artifacts|questionnaires|jev\/logs)[^\s"<]*/g;
+const dashboardHref = /^\/(?:artifacts|questionnaires|decisions\/logs)(?:[/?#]|$)/;
+const dashboardUrl = /(?:https?:\/\/)?mcp\.aravindmj\.in\/(?:artifacts|questionnaires|decisions\/logs)[^\s"<]*/g;
 const dashboardUrls = (html) => [...html.matchAll(dashboardUrl)].map(([url]) => url);
 
 function dashboardLinks(html) {
@@ -127,11 +127,11 @@ test("questionnaire tools are grouped by lifecycle", () => {
 });
 
 const artifactTools = ["get_attachment_upload_url", "publish_html", "update_artifact", "get_signed_url", "list_artifacts", "delete_artifact"];
-const questionnaireTools = ["create_questionnaire", "update_questionnaire", "get_questionnaire", "list_questionnaires", "get_questionnaire_signed_url", "submit_questionnaire_response", "set_questionnaire_status", "delete_questionnaire", "list_questionnaire_responses", "get_questionnaire_response", "delete_questionnaire_response"];
-const jevTools = ["make_decisions"];
+const questionnaireTools = ["create_questionnaire", "update_questionnaire", "get_questionnaire", "list_questionnaires", "get_questionnaire_signed_url", "submit_questionnaire_response", "request_questionnaire_email_verification", "verify_questionnaire_email", "set_questionnaire_status", "delete_questionnaire", "list_questionnaire_responses", "get_questionnaire_response", "delete_questionnaire_response"];
+const decisionsTools = ["make_decisions"];
 
 test("module landing tool registries match the exact MCP tools", () => {
   for (const tool of artifactTools) assert.match(ARTIFACT_LANDING_HTML, new RegExp(`<code>${tool}<\\/code>`));
   for (const tool of questionnaireTools) assert.match(QUESTIONNAIRE_LANDING_HTML, new RegExp(`<code>${tool}<\\/code>`));
-  for (const tool of jevTools) assert.match(JEV_LANDING_HTML, new RegExp(`<code>${tool}<\\/code>`));
+  for (const tool of decisionsTools) assert.match(DECISION_LANDING_HTML, new RegExp(`<code>${tool}<\\/code>`));
 });

@@ -183,7 +183,7 @@ test("rejects invalid nested conditions, excessive nesting, and duplicate IDs ac
 });
 
 test("requires only active nested questions and removes inactive branch answers", () => {
-  const questionnaire = store.create({
+  const questionnaire = store.create({ authentication_type: "self_report",
     title: "Conditional response",
     questions: [{
       id: "decision",
@@ -224,7 +224,7 @@ test("keeps nested definitions immutable across revisions", () => {
 });
 
 test("keeps drafts anonymous, then requires and records respondent identity on submission", async () => {
-  const questionnaire = await store.create({ title: "Small", questions: questions.slice(0, 2) });
+  const questionnaire = await store.create({ authentication_type: "self_report", title: "Small", questions: questions.slice(0, 2) });
   const draft = await store.createResponse(questionnaire.questionnaire_id, 1);
   assert.match(draft.response_id, /^[A-Za-z0-9]{24}$/);
   assert.match(draft.edit_token, /^[a-f0-9]{64}$/);
@@ -268,7 +268,7 @@ test("keeps drafts anonymous, then requires and records respondent identity on s
 });
 
 test("migrates historical response rows before recording respondent identity", async () => {
-  const questionnaire = store.create({ title: "Legacy", questions: [questions[0]] });
+  const questionnaire = store.create({ authentication_type: "self_report", title: "Legacy", questions: [questions[0]] });
   const draft = store.createResponse(questionnaire.questionnaire_id, 1);
   const config = store.config;
   const databasePath = path.join(config.dataDir, "questionnaire", "questionnaires.sqlite3");
@@ -356,7 +356,7 @@ test("autosaves incomplete typed values but enforces their rules on final submis
 });
 
 test("enforces number steps and rejects impossible local datetimes", () => {
-  const questionnaire = store.create({
+  const questionnaire = store.create({ authentication_type: "self_report",
     title: "Scheduling",
     questions: [
       { id: "quantity", type: "number", title: "Quantity", required: true, validation: { min: 0.5, step: 0.25 } },
@@ -381,7 +381,7 @@ test("enforces number steps and rejects impossible local datetimes", () => {
 });
 
 test("submits a complete identified response atomically without exposing an edit token", () => {
-  const questionnaire = store.create({ title: "Agent answer", questions: [questions[0]] });
+  const questionnaire = store.create({ authentication_type: "self_report", title: "Agent answer", questions: [questions[0]] });
   const submitted = store.submitNewResponse(questionnaire.questionnaire_id, undefined, respondent, { name: "Agent answer" });
   assert.equal(submitted.status, "submitted");
   assert.deepEqual(submitted.respondent, respondent);

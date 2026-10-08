@@ -15,10 +15,10 @@ let auditLog;
 let originalFetch;
 const sharedSecret = "s".repeat(64);
 const openRouterKey = "sk-or-v1-log-page-test-key";
-const trustedHeaders = { "x-jev-basic-auth": "1" };
+const trustedHeaders = { "x-artifact-basic-auth": "1" };
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(os.tmpdir(), "jev-logs-test-"));
+  root = await mkdtemp(path.join(os.tmpdir(), "decisions-logs-test-"));
   const secretDirectory = path.join(root, "secrets");
   await mkdir(secretDirectory, { recursive: true });
   await writeFile(path.join(secretDirectory, "shared-secret"), sharedSecret, { mode: 0o600 });
@@ -37,7 +37,7 @@ beforeEach(async () => {
     maxAnswerBytes: 256 * 1024,
     allowedHosts: ["127.0.0.1", "localhost"],
   });
-  auditLog = created.jevAuditLog;
+  auditLog = created.decisionsAuditLog;
   originalFetch = globalThis.fetch;
   server = createServer(created.app);
   await new Promise((resolve, reject) => {
@@ -68,8 +68,8 @@ function mockOpenRouter(respond) {
 }
 
 async function callTool(name, args) {
-  const client = new Client({ name: "jev-log-tests", version: "1.0.0" });
-  await client.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/jev/mcp`), {
+  const client = new Client({ name: "decisions-log-tests", version: "1.0.0" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/decisions/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${sharedSecret}` } },
   }));
   try {
@@ -83,9 +83,9 @@ function utc(timestamp) {
   return `${timestamp.slice(0, 19).replace("T", " ")} UTC`;
 }
 
-test("conceals the Jev call log unless Caddy marks Basic Auth as trusted", async () => {
-  for (const pathname of ["/jev/logs", "/jev/logs/"]) {
-    for (const headers of [{}, { "x-jev-basic-auth": "true" }, { "x-questionnaire-basic-auth": "1" }]) {
+test("conceals the Decision call log unless Caddy marks Basic Auth as trusted", async () => {
+  for (const pathname of ["/artifacts/decisions/logs", "/artifacts/decisions/logs/"]) {
+    for (const headers of [{}, { "x-artifact-basic-auth": "true" }, { "x-questionnaire-basic-auth": "1" }]) {
       const hidden = await fetch(`${baseUrl}${pathname}`, { headers });
       assert.equal(hidden.status, 404);
       assert.equal(hidden.headers.get("cache-control"), "private, no-store");
@@ -100,43 +100,43 @@ test("conceals the Jev call log unless Caddy marks Basic Auth as trusted", async
     assert.match(shown.headers.get("x-robots-tag"), /noindex/);
     assert.equal(shown.headers.get("x-frame-options"), "DENY");
     assert.equal(shown.headers.get("x-content-type-options"), "nosniff");
-    assert.equal(shown.headers.get("referrer-policy"), "no-referrer");
+    assert.equal(shown.headers.get("referrer-policy"), "same-origin");
     const csp = shown.headers.get("content-security-policy");
     assert.match(csp, /default-src 'none'/);
     assert.match(csp, /frame-ancestors 'none'/);
     assert.match(csp, /base-uri 'none'/);
-    assert.match(csp, /form-action 'none'/);
+    assert.match(csp, /form-action 'self'/);
     assert.doesNotMatch(csp, /unsafe-inline|unsafe-eval|script-src/);
     const nonce = csp.match(/style-src 'nonce-([A-Za-z0-9+/=]+)'/)?.[1];
     assert.ok(nonce);
     assert.ok((await shown.text()).includes(`<style nonce="${nonce}">`));
   }
-  assert.equal((await fetch(`${baseUrl}/jev/logs/anything`)).status, 404);
+  assert.equal((await fetch(`${baseUrl}/artifacts/decisions/logs/anything`)).status, 404);
 });
 
 async function logPage(query = "") {
-  const response = await fetch(`${baseUrl}/jev/logs${query}`, { headers: trustedHeaders });
+  const response = await fetch(`${baseUrl}/artifacts/decisions/logs${query}`, { headers: trustedHeaders });
   assert.equal(response.status, 200);
   return response.text();
 }
 
 test("explains an empty log without reporting a zero cost", async () => {
   const html = await logPage();
-  assert.match(html, /<h1>Jev calls<\/h1>/);
-  assert.match(html, /<a href="\/jev">[^<]*Jev overview<\/a>/);
+  assert.match(html, /<h1>Decision calls<\/h1>/);
+  assert.match(html, /<a href="\/decisions">[^<]*Decision overview<\/a>/);
   assert.match(html, /<dt>Total calls<\/dt><dd>0<\/dd>/);
   assert.match(html, /<dt>Succeeded<\/dt><dd>0<\/dd>/);
   assert.match(html, /<div><dt>Failed<\/dt><dd>0<\/dd><\/div>/);
   assert.match(html, /<dt>Total cost<\/dt><dd>Cost unavailable<\/dd>/);
   assert.doesNotMatch(html, /\$0\b/);
-  assert.match(html, /<h2>No Jev tool calls recorded yet<\/h2>/);
+  assert.match(html, /<h2>No Decision tool calls recorded yet<\/h2>/);
 });
 
 test("shows a successful call with its metadata, exact tiny cost, and expandable details", async () => {
   mockOpenRouter(() => Response.json({
     id: "gen-tiny",
-    model: "typesafe/jev-1.13-20260917",
-    provider: "TypeSafe",
+    model: "cloudflare/clef-flash",
+    provider: "Cloudflare",
     answers: { relevant: { type: "noul", noul: 0.93 } },
     usage: { input_tokens: 1234, output_tokens: 5, total_tokens: 1239, cost: 1.2e-8 },
   }));
@@ -151,9 +151,9 @@ test("shows a successful call with its metadata, exact tiny cost, and expandable
   assert.ok(html.includes(`<dt>Started</dt><dd><time datetime="${call.started_at}">${utc(call.started_at)}</time></dd>`));
   assert.ok(html.includes(`<dt>Completed</dt><dd><time datetime="${call.completed_at}">${utc(call.completed_at)}</time></dd>`));
   assert.match(html, /<dt>Duration<\/dt><dd>(?:\d+ ms|\d+\.\d s)<\/dd>/);
-  assert.match(html, /<dt>Requested model<\/dt><dd>typesafe\/jev-1\.13<\/dd>/);
-  assert.match(html, /<dt>Served model<\/dt><dd>typesafe\/jev-1\.13-20260917<\/dd>/);
-  assert.match(html, /<dt>Provider<\/dt><dd>TypeSafe<\/dd>/);
+  assert.match(html, /<dt>Requested model<\/dt><dd>cloudflare\/clef-flash<\/dd>/);
+  assert.match(html, /<dt>Served model<\/dt><dd>cloudflare\/clef-flash<\/dd>/);
+  assert.match(html, /<dt>Provider<\/dt><dd>Cloudflare<\/dd>/);
   assert.match(html, /<dt>Tokens<\/dt><dd>1,234 in · 5 out · 1,239 total<\/dd>/);
   assert.match(html, /<dt>Cost<\/dt><dd>\$0\.000000012<\/dd>/);
   assert.ok(html.includes(`<dt>Call ID</dt><dd><code>${call.id}</code></dd>`));
@@ -165,7 +165,7 @@ test("shows a successful call with its metadata, exact tiny cost, and expandable
   assert.match(html, /<dt>Total calls<\/dt><dd>1<\/dd>/);
   assert.match(html, /<dt>Succeeded<\/dt><dd>1<\/dd>/);
   assert.match(html, /<dt>Total cost<\/dt><dd>\$0\.000000012<\/dd>/);
-  assert.doesNotMatch(html, /No Jev tool calls recorded yet|\$0\.00<|1\.2e-8<\/dd>/);
+  assert.doesNotMatch(html, /No Decision tool calls recorded yet|\$0\.00<|1\.2e-8<\/dd>/);
 });
 
 function stylesheet(html) {
@@ -203,7 +203,7 @@ test("renders logged markup inertly and never exposes credentials", async () => 
     ? Response.json({ error: { message: `Rejected ${options.headers.Authorization}` } }, { status: 401 })
     : Response.json({
       id: "gen-<b>bold</b>",
-      model: "typesafe/jev-1.13-20260917",
+      model: "cloudflare/clef-flash",
       provider: '<img src=x onerror="alert(1)">',
       answers: { relevant: { type: "noul", noul: 0.5 } },
       usage: { cost: 0.0001 },
@@ -221,7 +221,7 @@ test("renders logged markup inertly and never exposes credentials", async () => 
   assert.match(html, /<dt>Generation ID<\/dt><dd><code>gen-&lt;b&gt;bold&lt;\/b&gt;<\/code><\/dd>/);
   assert.match(html, /OpenRouter Decisions request failed with HTTP 401/);
 
-  const stored = await Promise.all(["audit.sqlite3", "audit.sqlite3-wal"].map((file) => readFile(path.join(root, "data", "jev", file)).catch(() => Buffer.alloc(0))));
+  const stored = await Promise.all(["audit.sqlite3", "audit.sqlite3-wal"].map((file) => readFile(path.join(root, "data", "decisions", file)).catch(() => Buffer.alloc(0))));
   for (const content of [html, ...stored.map((buffer) => buffer.toString("latin1"))]) {
     assert.ok(!content.includes(openRouterKey));
     assert.ok(!content.includes(sharedSecret));
@@ -237,7 +237,7 @@ function recordSuccessfulCalls(count) {
   }));
   const calls = auditLog.receive(messages);
   for (const message of messages) {
-    calls.claim(message.id).succeed({ model: "typesafe/jev-1.13-20260917", answers: { relevant: { type: "noul", noul: 0.5 } } });
+    calls.claim(message.id).succeed({ model: "cloudflare/clef-flash", answers: { relevant: { type: "noul", noul: 0.5 } } });
   }
 }
 
@@ -251,13 +251,13 @@ test("pages through calls newest first with a bounded page size", async () => {
   const first = await logPage();
   assert.deepEqual(listedRequestIds(first), Array.from({ length: 25 }, (_, index) => 27 - index));
   assert.match(first, /Calls 1 to 25 of 27/);
-  assert.match(first, /<a class="button" rel="next" href="\/jev\/logs\?offset=25">Older calls<\/a>/);
+  assert.match(first, /<a class="button" rel="next" href="\/artifacts\/decisions\/logs\?offset=25">Older calls<\/a>/);
   assert.doesNotMatch(first, /rel="prev"/);
 
   const second = await logPage("?offset=25");
   assert.deepEqual(listedRequestIds(second), [2, 1]);
   assert.match(second, /Calls 26 to 27 of 27/);
-  assert.match(second, /<a class="button" rel="prev" href="\/jev\/logs\?offset=0">Newer calls<\/a>/);
+  assert.match(second, /<a class="button" rel="prev" href="\/artifacts\/decisions\/logs\?offset=0">Newer calls<\/a>/);
   assert.doesNotMatch(second, /rel="next"/);
   assert.match(second, /<dt>Total calls<\/dt><dd>27<\/dd>/);
 
@@ -268,7 +268,7 @@ test("pages through calls newest first with a bounded page size", async () => {
   const beyond = await logPage("?offset=500");
   assert.deepEqual(listedRequestIds(beyond), []);
   assert.match(beyond, /<h2>No calls on this page<\/h2>/);
-  assert.match(beyond, /<a class="button" href="\/jev\/logs">Show the newest calls<\/a>/);
+  assert.match(beyond, /<a class="button" href="\/artifacts\/decisions\/logs">Show the newest calls<\/a>/);
 });
 
 test("adds costs as exact decimals and says how many calls lack cost data", async () => {
@@ -281,7 +281,7 @@ test("adds costs as exact decimals and says how many calls lack cost data", asyn
   }));
   const calls = auditLog.receive(messages);
   costs.forEach((cost, index) => calls.claim(index + 1).succeed({
-    model: "typesafe/jev-1.13-20260917",
+    model: "cloudflare/clef-flash",
     answers: { relevant: { type: "noul", noul: 0.5 } },
     ...(cost === undefined ? {} : { usage: { cost } }),
   }));

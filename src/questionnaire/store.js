@@ -1,9 +1,10 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ServiceError } from "../errors.js";
 import { createQuestionnaireSignedUrl } from "../security.js";
+import { createSmtpMailer } from "./mailer.js";
 
 export const QUESTIONNAIRE_ID_PATTERN = /^[A-Za-z0-9]{24}$/;
 const MAX_QUESTION_NESTING_DEPTH = 8;
@@ -16,6 +17,25 @@ export const QUESTION_TYPES = Object.freeze([
 const QUESTION_TYPE_SET = new Set(QUESTION_TYPES);
 const OPTION_TYPES = new Set(["single_choice", "multiple_choice", "dropdown", "ranking", "matrix"]);
 const TEXT_TYPES = new Set(["short_text", "long_text", "email", "url", "phone"]);
+export const AUTHENTICATION_TYPES = Object.freeze(["anonymous", "self_report", "email_verified"]);
+export const EMAIL_VERIFICATION_LIMITS = Object.freeze({
+  codeTtlMs: 10 * 60_000,
+  proofTtlMs: 30 * 60_000,
+  maxFailedAttempts: 5,
+  resendCooldownMs: 60_000,
+  sendsPerEmailPerQuestionnairePerHour: 5,
+  sendsPerSourcePerHour: 20,
+});
+const HOUR_MS = 60 * 60_000;
+
+function sha256(value) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function hashesMatch(expectedHex, actualHex) {
+  if (typeof expectedHex !== "string" || typeof actualHex !== "string" || expectedHex.length !== actualHex.length) return false;
+  return timingSafeEqual(Buffer.from(expectedHex, "hex"), Buffer.from(actualHex, "hex"));
+}
 
 function serviceError(message, status = 400) {
   return new ServiceError(status, message);
@@ -46,7 +66,10 @@ function cleanSingleLine(value, name, max, options = {}) {
   return cleanText(value, name, max, options).replace(/\s+/g, " ");
 }
 
-export const RESPONDENT_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Exactly one bare addr-spec: a dot-atom local part and a DNS host name. Quoted strings, comments,
+// display names, groups, address literals, and separators are rejected so that SMTP libraries cannot
+// read the value as a different or additional recipient.
+export const RESPONDENT_EMAIL_PATTERN = /^(?=[^@]{1,64}@)[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?=.{4,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/;
 
 export function normalizeRespondent(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw serviceError("respondent name and email are required");
@@ -55,6 +78,20 @@ export function normalizeRespondent(raw) {
   if (!RESPONDENT_EMAIL_PATTERN.test(email)) throw serviceError("respondent email must be a valid email address");
   const at = email.lastIndexOf("@");
   return { name, email: `${email.slice(0, at)}@${email.slice(at + 1).toLowerCase()}` };
+}
+
+function normalizeAuthenticationType(value, fallback) {
+  if (value === undefined) return fallback;
+  if (!AUTHENTICATION_TYPES.includes(value)) throw serviceError(`authentication_type must be one of ${AUTHENTICATION_TYPES.join(", ")}`);
+  return value;
+}
+
+function identityStatus(row, authenticationType) {
+  if (row.status !== "submitted") return "pending";
+  if (authenticationType === "anonymous") return "anonymous";
+  if (row.email_verified_at) return "email_verified";
+  if (row.respondent_name && row.respondent_email) return "self_reported";
+  return "legacy_missing";
 }
 
 function cleanBoolean(value, fallback) {
@@ -386,6 +423,9 @@ export function validateAnswers(questions, raw, { final = false } = {}) {
   return answers;
 }
 
+const RESPONSE_SELECT = `SELECT r.*, v.authentication_type FROM responses r
+  JOIN questionnaire_revisions v ON v.questionnaire_id = r.questionnaire_id AND v.revision = r.revision`;
+
 export class QuestionnaireStore {
   constructor(config) {
     this.config = {
@@ -397,6 +437,8 @@ export class QuestionnaireStore {
       maxAnswerBytes: config.maxAnswerBytes ?? 256 * 1024,
     };
     this.databasePath = path.join(config.dataDir, "questionnaire", "questionnaires.sqlite3");
+    this.clock = config.clock ?? Date.now;
+    this.mailer = config.questionnaireMailer ?? createSmtpMailer(config.questionnaireSmtp);
     this.db = null;
   }
 
@@ -425,6 +467,7 @@ export class QuestionnaireStore {
         description TEXT NOT NULL,
         questions_json TEXT NOT NULL,
         settings_json TEXT NOT NULL,
+        authentication_type TEXT NOT NULL CHECK(authentication_type IN ('anonymous','self_report','email_verified')),
         created_at TEXT NOT NULL,
         PRIMARY KEY(questionnaire_id, revision),
         FOREIGN KEY(questionnaire_id) REFERENCES questionnaires(id) ON DELETE CASCADE
@@ -442,10 +485,41 @@ export class QuestionnaireStore {
         submitted_at TEXT,
         respondent_name TEXT,
         respondent_email TEXT,
+        email_verified_at TEXT,
+        channel TEXT NOT NULL DEFAULT 'browser' CHECK(channel IN ('browser','mcp')),
         FOREIGN KEY(questionnaire_id, revision) REFERENCES questionnaire_revisions(questionnaire_id, revision) ON DELETE CASCADE
       ) STRICT;
       CREATE INDEX IF NOT EXISTS responses_questionnaire_idx ON responses(questionnaire_id, revision, status, updated_at DESC);
+      CREATE TABLE IF NOT EXISTS questionnaire_email_verifications (
+        response_id TEXT PRIMARY KEY,
+        questionnaire_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        email TEXT NOT NULL,
+        code_salt TEXT,
+        code_hash TEXT,
+        code_expires_at INTEGER,
+        failed_attempts INTEGER NOT NULL DEFAULT 0,
+        last_sent_at INTEGER NOT NULL,
+        proof_hash TEXT,
+        proof_expires_at INTEGER,
+        verified_at INTEGER,
+        FOREIGN KEY(response_id) REFERENCES responses(id) ON DELETE CASCADE
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS questionnaire_email_sends (
+        id INTEGER PRIMARY KEY,
+        questionnaire_id TEXT NOT NULL,
+        email_hash TEXT NOT NULL,
+        source_hash TEXT NOT NULL,
+        sent_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS questionnaire_email_sends_email_idx ON questionnaire_email_sends(questionnaire_id, email_hash, sent_at);
+      CREATE INDEX IF NOT EXISTS questionnaire_email_sends_source_idx ON questionnaire_email_sends(source_hash, sent_at);
     `);
+    // Revisions created before authentication modes existed collected name and email, so they become self_report.
+    const revisionColumns = this.db.prepare("PRAGMA table_info(questionnaire_revisions)").all();
+    if (!revisionColumns.some((column) => column.name === "authentication_type")) {
+      this.db.exec("ALTER TABLE questionnaire_revisions ADD COLUMN authentication_type TEXT NOT NULL DEFAULT 'self_report' CHECK(authentication_type IN ('anonymous','self_report','email_verified'))");
+    }
     const responseColumns = this.db.prepare("PRAGMA table_info(responses)").all();
     if (!responseColumns.some((column) => column.name === "version")) {
       this.db.exec("ALTER TABLE responses ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK(version >= 0)");
@@ -455,6 +529,12 @@ export class QuestionnaireStore {
     }
     if (!responseColumns.some((column) => column.name === "respondent_email")) {
       this.db.exec("ALTER TABLE responses ADD COLUMN respondent_email TEXT");
+    }
+    if (!responseColumns.some((column) => column.name === "email_verified_at")) {
+      this.db.exec("ALTER TABLE responses ADD COLUMN email_verified_at TEXT");
+    }
+    if (!responseColumns.some((column) => column.name === "channel")) {
+      this.db.exec("ALTER TABLE responses ADD COLUMN channel TEXT NOT NULL DEFAULT 'browser' CHECK(channel IN ('browser','mcp'))");
     }
   }
 
@@ -490,6 +570,7 @@ export class QuestionnaireStore {
       description: input.description === undefined && previous ? previous.description : cleanText(input.description, "description", 4_000),
       questions: input.questions === undefined && previous ? previous.questions : normalizeQuestions(input.questions, this.config.maxQuestions),
       settings: input.settings === undefined && previous ? previous.settings : normalizeSettings(input.settings, previous?.settings),
+      authentication_type: normalizeAuthenticationType(input.authentication_type, previous?.authentication_type ?? "anonymous"),
     };
   }
 
@@ -502,8 +583,8 @@ export class QuestionnaireStore {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.prepare("INSERT INTO questionnaires (id, status, current_revision, created_at, updated_at) VALUES (?, 'open', 1, ?, ?)").run(id, now, now);
-      this.db.prepare("INSERT INTO questionnaire_revisions (questionnaire_id, revision, title, description, questions_json, settings_json, created_at) VALUES (?, 1, ?, ?, ?, ?, ?)")
-        .run(id, definition.title, definition.description, JSON.stringify(definition.questions), JSON.stringify(definition.settings), now);
+      this.db.prepare("INSERT INTO questionnaire_revisions (questionnaire_id, revision, title, description, questions_json, settings_json, authentication_type, created_at) VALUES (?, 1, ?, ?, ?, ?, ?, ?)")
+        .run(id, definition.title, definition.description, JSON.stringify(definition.questions), JSON.stringify(definition.settings), definition.authentication_type, now);
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -523,8 +604,8 @@ export class QuestionnaireStore {
     const now = new Date().toISOString();
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("INSERT INTO questionnaire_revisions (questionnaire_id, revision, title, description, questions_json, settings_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(questionnaireId, revision, definition.title, definition.description, JSON.stringify(definition.questions), JSON.stringify(definition.settings), now);
+      this.db.prepare("INSERT INTO questionnaire_revisions (questionnaire_id, revision, title, description, questions_json, settings_json, authentication_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(questionnaireId, revision, definition.title, definition.description, JSON.stringify(definition.questions), JSON.stringify(definition.settings), definition.authentication_type, now);
       this.db.prepare("UPDATE questionnaires SET current_revision = ?, updated_at = ? WHERE id = ?").run(revision, now, questionnaireId);
       this.db.exec("COMMIT");
     } catch (error) {
@@ -539,10 +620,10 @@ export class QuestionnaireStore {
     const selectedRevision = revision === undefined ? undefined : this.validateRevision(revision);
     const row = selectedRevision === undefined
       ? this.db.prepare(`SELECT q.id, q.status, q.current_revision AS revision, q.created_at, q.updated_at,
-          r.title, r.description, r.questions_json, r.settings_json, r.created_at AS revision_created_at
+          r.title, r.description, r.questions_json, r.settings_json, r.authentication_type, r.created_at AS revision_created_at
           FROM questionnaires q JOIN questionnaire_revisions r ON r.questionnaire_id = q.id AND r.revision = q.current_revision WHERE q.id = ?`).get(questionnaireId)
       : this.db.prepare(`SELECT q.id, q.status, r.revision, q.created_at, q.updated_at,
-          r.title, r.description, r.questions_json, r.settings_json, r.created_at AS revision_created_at
+          r.title, r.description, r.questions_json, r.settings_json, r.authentication_type, r.created_at AS revision_created_at
           FROM questionnaires q JOIN questionnaire_revisions r ON r.questionnaire_id = q.id WHERE q.id = ? AND r.revision = ?`).get(questionnaireId, selectedRevision);
     if (!row) throw serviceError(selectedRevision === undefined ? "Questionnaire not found" : "Questionnaire revision not found", 404);
     const stats = this.db.prepare("SELECT count(*) AS total, sum(status = 'draft') AS drafts, sum(status = 'submitted') AS submitted FROM responses WHERE questionnaire_id = ? AND revision = ?").get(questionnaireId, row.revision);
@@ -554,6 +635,7 @@ export class QuestionnaireStore {
       description: row.description,
       questions: parseJson(row.questions_json),
       settings: parseJson(row.settings_json),
+      authentication_type: row.authentication_type,
       created_at: row.created_at,
       updated_at: row.updated_at,
       revision_created_at: row.revision_created_at,
@@ -598,7 +680,7 @@ export class QuestionnaireStore {
     return current;
   }
 
-  createResponse(id, revision) {
+  createResponse(id, revision, { channel = "browser" } = {}) {
     const questionnaire = this.get(id, revision);
     if (questionnaire.status !== "open") throw serviceError("This questionnaire is closed", 409);
     const count = this.db.prepare("SELECT COUNT(*) AS total FROM responses WHERE questionnaire_id = ?").get(questionnaire.questionnaire_id).total;
@@ -607,10 +689,10 @@ export class QuestionnaireStore {
     }
     const responseId = this.allocateId("responses");
     const editToken = randomBytes(32).toString("hex");
-    const tokenHash = createHash("sha256").update(editToken, "utf8").digest("hex");
+    const tokenHash = sha256(editToken);
     const now = new Date().toISOString();
-    this.db.prepare("INSERT INTO responses (id, questionnaire_id, revision, edit_token_hash, status, answers_json, version, created_at, updated_at) VALUES (?, ?, ?, ?, 'draft', '{}', 0, ?, ?)")
-      .run(responseId, questionnaire.questionnaire_id, questionnaire.revision, tokenHash, now, now);
+    this.db.prepare("INSERT INTO responses (id, questionnaire_id, revision, edit_token_hash, status, answers_json, version, channel, created_at, updated_at) VALUES (?, ?, ?, ?, 'draft', '{}', 0, ?, ?, ?)")
+      .run(responseId, questionnaire.questionnaire_id, questionnaire.revision, tokenHash, channel, now, now);
     return { response_id: responseId, edit_token: editToken, status: "draft", answers: {}, respondent: null, version: 0, created_at: now, updated_at: now, submitted_at: null };
   }
 
@@ -619,28 +701,18 @@ export class QuestionnaireStore {
     const selectedRevision = this.validateRevision(revision);
     const validatedResponseId = this.validateId(responseId, "Response");
     if (typeof editToken !== "string" || !/^[a-f0-9]{64}$/.test(editToken)) throw serviceError("Response not found", 404);
-    const tokenHash = createHash("sha256").update(editToken, "utf8").digest("hex");
-    const row = this.db.prepare("SELECT * FROM responses WHERE id = ? AND questionnaire_id = ? AND revision = ? AND edit_token_hash = ?")
-      .get(validatedResponseId, questionnaireId, selectedRevision, tokenHash);
+    const row = this.db.prepare(`${RESPONSE_SELECT} WHERE r.id = ? AND r.questionnaire_id = ? AND r.revision = ? AND r.edit_token_hash = ?`)
+      .get(validatedResponseId, questionnaireId, selectedRevision, sha256(editToken));
     if (!row) throw serviceError("Response not found", 404);
     return row;
   }
 
-  publicResponse(row) {
-    return {
-      response_id: row.id,
-      questionnaire_id: row.questionnaire_id,
-      revision: Number(row.revision),
-      status: row.status,
-      answers: parseJson(row.answers_json),
-      respondent: row.respondent_name && row.respondent_email
-        ? { name: row.respondent_name, email: row.respondent_email }
-        : null,
-      version: Number(row.version),
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-      submitted_at: row.submitted_at,
-    };
+  mcpResponseRow(id, responseId) {
+    const questionnaireId = this.validateId(id);
+    const validatedResponseId = this.validateId(responseId, "Response");
+    const row = this.db.prepare(`${RESPONSE_SELECT} WHERE r.id = ? AND r.questionnaire_id = ? AND r.channel = 'mcp'`).get(validatedResponseId, questionnaireId);
+    if (!row) throw serviceError("Response not found", 404);
+    return row;
   }
 
   responseSummary(row) {
@@ -649,14 +721,22 @@ export class QuestionnaireStore {
       questionnaire_id: row.questionnaire_id,
       revision: Number(row.revision),
       status: row.status,
+      authentication_type: row.authentication_type,
+      identity_status: identityStatus(row, row.authentication_type),
       respondent: row.respondent_name && row.respondent_email
         ? { name: row.respondent_name, email: row.respondent_email }
         : null,
+      email_verified_at: row.email_verified_at ?? null,
       version: Number(row.version),
       created_at: row.created_at,
       updated_at: row.updated_at,
       submitted_at: row.submitted_at,
     };
+  }
+
+  publicResponse(row) {
+    const { version, created_at, updated_at, submitted_at, ...summary } = this.responseSummary(row);
+    return { ...summary, answers: parseJson(row.answers_json), version, created_at, updated_at, submitted_at };
   }
 
   getResponseForEdit(id, revision, responseId, editToken) {
@@ -678,28 +758,71 @@ export class QuestionnaireStore {
     return this.getResponseForEdit(id, revision, responseId, editToken);
   }
 
-  submitResponse(id, revision, responseId, editToken, answers, respondent, expectedVersion) {
-    const questionnaire = this.get(id, revision);
+  identityFor(questionnaire, respondent) {
+    if (questionnaire.authentication_type === "anonymous") {
+      if (respondent !== undefined && respondent !== null) throw serviceError("This questionnaire is anonymous; respondent name and email are not accepted");
+      return null;
+    }
+    return normalizeRespondent(respondent);
+  }
+
+  // Validates and finalizes a draft. For email_verified, the proof is consumed in the same transaction.
+  finalizeResponse(questionnaire, row, answers, respondent, expectedVersion, verificationProof) {
     if (questionnaire.status !== "open") throw serviceError("This questionnaire is closed", 409);
-    const row = this.responseRow(id, revision, responseId, editToken);
     if (row.status === "submitted") throw serviceError("This response is already submitted", 409);
     if (expectedVersion !== undefined && (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0)) throw serviceError("version must be a non-negative integer");
     if (expectedVersion !== undefined && expectedVersion !== Number(row.version)) throw serviceError("This response changed in another tab; reload before continuing", 409);
     const validated = validateAnswers(questionnaire.questions, answers, { final: true });
-    const identified = normalizeRespondent(respondent);
+    const identity = this.identityFor(questionnaire, respondent);
     const encoded = JSON.stringify(validated);
     if (Buffer.byteLength(encoded, "utf8") > this.config.maxAnswerBytes) throw serviceError("Answers exceed the storage limit", 413);
+    const verified = questionnaire.authentication_type === "email_verified";
+    let verifiedAt = null;
+    let proofHash = null;
+    if (verified) {
+      const challenge = this.db.prepare("SELECT * FROM questionnaire_email_verifications WHERE response_id = ?").get(row.id);
+      proofHash = typeof verificationProof === "string" && /^[a-f0-9]{64}$/.test(verificationProof) ? sha256(verificationProof) : null;
+      if (!challenge || !proofHash || !hashesMatch(challenge.proof_hash, proofHash)
+        || challenge.questionnaire_id !== row.questionnaire_id || Number(challenge.revision) !== Number(row.revision)) {
+        throw serviceError("Email verification is required before submitting", 403);
+      }
+      if (challenge.email !== identity.email) throw serviceError("The submitted email does not match the verified email; verify this email first", 403);
+      if (Number(challenge.proof_expires_at) <= this.clock()) throw serviceError("The email verification expired; verify your email again", 403);
+      verifiedAt = new Date(Number(challenge.verified_at)).toISOString();
+    }
     const now = new Date().toISOString();
-    this.db.prepare("UPDATE responses SET answers_json = ?, respondent_name = ?, respondent_email = ?, status = 'submitted', version = version + 1, updated_at = ?, submitted_at = ? WHERE id = ?")
-      .run(encoded, identified.name, identified.email, now, now, row.id);
-    return this.getResponseForEdit(id, revision, responseId, editToken);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (verified) {
+        const consumed = this.db.prepare("DELETE FROM questionnaire_email_verifications WHERE response_id = ? AND proof_hash = ? AND proof_expires_at > ?").run(row.id, proofHash, this.clock());
+        if (consumed.changes !== 1) throw serviceError("Email verification is required before submitting", 403);
+      }
+      const updated = this.db.prepare("UPDATE responses SET answers_json = ?, respondent_name = ?, respondent_email = ?, email_verified_at = ?, status = 'submitted', version = version + 1, updated_at = ?, submitted_at = ? WHERE id = ? AND status = 'draft'")
+        .run(encoded, identity?.name ?? null, identity?.email ?? null, verifiedAt, now, now, row.id);
+      if (updated.changes !== 1) throw serviceError("This response is already submitted", 409);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getResponse(row.questionnaire_id, row.id);
+  }
+
+  submitResponse(id, revision, responseId, editToken, answers, respondent, expectedVersion, { verificationProof } = {}) {
+    const questionnaire = this.get(id, revision);
+    if (questionnaire.status !== "open") throw serviceError("This questionnaire is closed", 409);
+    const row = this.responseRow(id, revision, responseId, editToken);
+    return this.finalizeResponse(questionnaire, row, answers, respondent, expectedVersion, verificationProof);
   }
 
   submitNewResponse(id, revision, respondent, answers) {
     const questionnaire = this.get(id, revision);
     if (questionnaire.status !== "open") throw serviceError("This questionnaire is closed", 409);
+    if (questionnaire.authentication_type === "email_verified") {
+      throw serviceError("This questionnaire requires email verification: request a code, verify it, then submit with response_id and verification_proof", 403);
+    }
     const validated = validateAnswers(questionnaire.questions, answers, { final: true });
-    const identified = normalizeRespondent(respondent);
+    const identity = this.identityFor(questionnaire, respondent);
     const encoded = JSON.stringify(validated);
     if (Buffer.byteLength(encoded, "utf8") > this.config.maxAnswerBytes) throw serviceError("Answers exceed the storage limit", 413);
     const count = this.db.prepare("SELECT COUNT(*) AS total FROM responses WHERE questionnaire_id = ?").get(questionnaire.questionnaire_id).total;
@@ -707,33 +830,199 @@ export class QuestionnaireStore {
     const responseId = this.allocateId("responses");
     const tokenHash = createHash("sha256").update(randomBytes(32)).digest("hex");
     const now = new Date().toISOString();
-    this.db.prepare("INSERT INTO responses (id, questionnaire_id, revision, edit_token_hash, status, answers_json, respondent_name, respondent_email, version, created_at, updated_at, submitted_at) VALUES (?, ?, ?, ?, 'submitted', ?, ?, ?, 1, ?, ?, ?)")
-      .run(responseId, questionnaire.questionnaire_id, questionnaire.revision, tokenHash, encoded, identified.name, identified.email, now, now, now);
+    this.db.prepare("INSERT INTO responses (id, questionnaire_id, revision, edit_token_hash, status, answers_json, respondent_name, respondent_email, version, channel, created_at, updated_at, submitted_at) VALUES (?, ?, ?, ?, 'submitted', ?, ?, ?, 1, 'mcp', ?, ?, ?)")
+      .run(responseId, questionnaire.questionnaire_id, questionnaire.revision, tokenHash, encoded, identity?.name ?? null, identity?.email ?? null, now, now, now);
     return this.getResponse(questionnaire.questionnaire_id, responseId);
+  }
+
+  submitMcpVerifiedResponse({ questionnaireId, revision, responseId, respondent, answers, verificationProof }) {
+    const row = this.mcpResponseRow(questionnaireId, responseId);
+    if (revision !== undefined && this.validateRevision(revision) !== Number(row.revision)) {
+      throw serviceError(`response_id belongs to revision ${row.revision}, not revision ${revision}`, 409);
+    }
+    const questionnaire = this.get(row.questionnaire_id, Number(row.revision));
+    return this.finalizeResponse(questionnaire, row, answers, respondent, undefined, verificationProof);
+  }
+
+  cleanupVerifications(now) {
+    this.db.prepare(`DELETE FROM questionnaire_email_verifications
+      WHERE (proof_hash IS NULL OR proof_expires_at <= ?) AND (code_hash IS NULL OR code_expires_at <= ?) AND last_sent_at + ? <= ?`)
+      .run(now, now, EMAIL_VERIFICATION_LIMITS.resendCooldownMs, now);
+    this.db.prepare("DELETE FROM questionnaire_email_sends WHERE sent_at <= ?").run(now - HOUR_MS);
+  }
+
+  // Runs fn under one write lock so checks and the writes that depend on them cannot interleave
+  // with another connection or worker using the same database.
+  immediate(fn) {
+    this.db.exec("BEGIN IMMEDIATE");
+    let result;
+    try {
+      result = fn();
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return result;
+  }
+
+  assertVerificationOpen(row) {
+    const current = this.db.prepare(`SELECT q.status AS questionnaire_status, v.authentication_type, r.status AS response_status
+      FROM responses r JOIN questionnaires q ON q.id = r.questionnaire_id
+      JOIN questionnaire_revisions v ON v.questionnaire_id = r.questionnaire_id AND v.revision = r.revision
+      WHERE r.id = ?`).get(row.id);
+    if (!current) throw serviceError("Response not found", 404);
+    if (current.questionnaire_status !== "open") throw serviceError("This questionnaire is closed", 409);
+    if (current.authentication_type !== "email_verified") throw serviceError("This questionnaire does not use email verification");
+    if (current.response_status !== "draft") throw serviceError("This response is already submitted", 409);
+  }
+
+  async sendVerificationCode(row, respondent, sourceIp) {
+    const questionnaire = this.get(row.questionnaire_id, Number(row.revision));
+    if (questionnaire.status !== "open") throw serviceError("This questionnaire is closed", 409);
+    if (questionnaire.authentication_type !== "email_verified") throw serviceError("This questionnaire does not use email verification");
+    if (row.status !== "draft") throw serviceError("This response is already submitted", 409);
+    const identity = normalizeRespondent(respondent);
+    if (!this.mailer?.configured) throw serviceError("Email verification is unavailable right now. No code was sent.", 503);
+    const limits = EMAIL_VERIFICATION_LIMITS;
+    // Quotas, proofs, and delivery all use the same normalized address.
+    const emailHash = sha256(`questionnaire-email:${identity.email.toLowerCase()}`);
+    const sourceHash = sha256(`questionnaire-source:${String(sourceIp || "unknown")}`);
+    const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+    const salt = randomBytes(16).toString("hex");
+    const codeHash = sha256(`${salt}:${code}`);
+    const now = this.clock();
+    const expiresAt = now + limits.codeTtlMs;
+    this.immediate(() => {
+      this.cleanupVerifications(now);
+      this.assertVerificationOpen(row);
+      const existing = this.db.prepare("SELECT last_sent_at FROM questionnaire_email_verifications WHERE response_id = ?").get(row.id);
+      if (existing && now - Number(existing.last_sent_at) < limits.resendCooldownMs) {
+        const seconds = Math.ceil((limits.resendCooldownMs - (now - Number(existing.last_sent_at))) / 1000);
+        throw serviceError(`Please wait ${seconds} seconds before requesting another code`, 429);
+      }
+      const since = now - HOUR_MS;
+      const emailSends = Number(this.db.prepare("SELECT count(*) AS n FROM questionnaire_email_sends WHERE questionnaire_id = ? AND email_hash = ? AND sent_at > ?").get(row.questionnaire_id, emailHash, since).n);
+      if (emailSends >= limits.sendsPerEmailPerQuestionnairePerHour) throw serviceError("Too many codes were requested for this email in the last hour. Try again later.", 429);
+      const sourceSends = Number(this.db.prepare("SELECT count(*) AS n FROM questionnaire_email_sends WHERE source_hash = ? AND sent_at > ?").get(sourceHash, since).n);
+      if (sourceSends >= limits.sendsPerSourcePerHour) throw serviceError("Too many verification emails were requested from this network in the last hour. Try again later.", 429);
+      // Delivery attempts count toward the limits whether or not the provider accepts them.
+      this.db.prepare("INSERT INTO questionnaire_email_sends (questionnaire_id, email_hash, source_hash, sent_at) VALUES (?, ?, ?, ?)").run(row.questionnaire_id, emailHash, sourceHash, now);
+      this.db.prepare(`INSERT OR REPLACE INTO questionnaire_email_verifications
+        (response_id, questionnaire_id, revision, email, code_salt, code_hash, code_expires_at, failed_attempts, last_sent_at, proof_hash, proof_expires_at, verified_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, NULL, NULL)`)
+        .run(row.id, row.questionnaire_id, Number(row.revision), identity.email, salt, codeHash, expiresAt, now);
+    });
+    try {
+      await this.mailer.sendVerificationCode({ to: identity.email, code, questionnaireTitle: questionnaire.title, expiresInMinutes: limits.codeTtlMs / 60_000 });
+    } catch (error) {
+      this.db?.prepare("UPDATE questionnaire_email_verifications SET code_hash = NULL, code_salt = NULL WHERE response_id = ? AND code_hash = ?").run(row.id, codeHash);
+      if (error instanceof ServiceError) throw error;
+      throw serviceError("The verification email could not be sent. No code was sent; try again later.", 502);
+    }
+    return {
+      response_id: row.id,
+      questionnaire_id: row.questionnaire_id,
+      revision: Number(row.revision),
+      email: identity.email,
+      delivery: "accepted",
+      expires_at: new Date(expiresAt).toISOString(),
+      resend_available_at: new Date(now + limits.resendCooldownMs).toISOString(),
+    };
+  }
+
+  confirmVerificationCode(row, email, code) {
+    const normalizedEmail = normalizeRespondent({ name: "-", email }).email;
+    const candidate = typeof code === "string" ? code.trim() : "";
+    const now = this.clock();
+    const proof = randomBytes(32).toString("hex");
+    const proofExpiresAt = now + EMAIL_VERIFICATION_LIMITS.proofTtlMs;
+    // The attempt counter, expiry, and single-use consumption are read and written under one lock.
+    // A wrong code commits its counted attempt before the error is raised.
+    const outcome = this.immediate(() => {
+      this.assertVerificationOpen(row);
+      const challenge = this.db.prepare("SELECT * FROM questionnaire_email_verifications WHERE response_id = ?").get(row.id);
+      if (!challenge || challenge.email !== normalizedEmail || !challenge.code_hash) {
+        throw serviceError("No active verification code for this email; request a new code");
+      }
+      if (Number(challenge.failed_attempts) >= EMAIL_VERIFICATION_LIMITS.maxFailedAttempts) {
+        throw serviceError("Too many incorrect codes; request a new code", 429);
+      }
+      if (Number(challenge.code_expires_at) <= now) throw serviceError("The verification code expired; request a new code");
+      if (!/^\d{6}$/.test(candidate) || !hashesMatch(challenge.code_hash, sha256(`${challenge.code_salt}:${candidate}`))) {
+        this.db.prepare("UPDATE questionnaire_email_verifications SET failed_attempts = failed_attempts + 1 WHERE response_id = ?").run(row.id);
+        return { remaining: EMAIL_VERIFICATION_LIMITS.maxFailedAttempts - Number(challenge.failed_attempts) - 1 };
+      }
+      this.db.prepare("UPDATE questionnaire_email_verifications SET code_hash = NULL, code_salt = NULL, proof_hash = ?, proof_expires_at = ?, verified_at = ? WHERE response_id = ?")
+        .run(sha256(proof), proofExpiresAt, now, row.id);
+      return { verified: true };
+    });
+    if (!outcome.verified) {
+      const { remaining } = outcome;
+      throw serviceError(remaining > 0 ? `The verification code is incorrect; ${remaining} ${remaining === 1 ? "attempt" : "attempts"} left` : "The verification code is incorrect; request a new code");
+    }
+    return {
+      response_id: row.id,
+      email: normalizedEmail,
+      verified_at: new Date(now).toISOString(),
+      verification_proof: proof,
+      proof_expires_at: new Date(proofExpiresAt).toISOString(),
+    };
+  }
+
+  requestEmailVerification({ questionnaireId, revision, responseId, editToken, respondent, sourceIp }) {
+    return Promise.resolve().then(() => this.sendVerificationCode(this.responseRow(questionnaireId, revision, responseId, editToken), respondent, sourceIp));
+  }
+
+  confirmEmailVerification({ questionnaireId, revision, responseId, editToken, email, code }) {
+    return this.confirmVerificationCode(this.responseRow(questionnaireId, revision, responseId, editToken), email, code);
+  }
+
+  async requestMcpEmailVerification({ questionnaireId, revision, responseId, respondent, sourceIp }) {
+    if (responseId !== undefined) {
+      const row = this.mcpResponseRow(questionnaireId, responseId);
+      if (revision !== undefined && this.validateRevision(revision) !== Number(row.revision)) throw serviceError("Response not found", 404);
+      return this.sendVerificationCode(row, respondent, sourceIp);
+    }
+    const questionnaire = this.get(questionnaireId, revision);
+    if (questionnaire.authentication_type !== "email_verified") throw serviceError("This questionnaire does not use email verification");
+    normalizeRespondent(respondent);
+    const draft = this.createResponse(questionnaire.questionnaire_id, questionnaire.revision, { channel: "mcp" });
+    const row = this.mcpResponseRow(questionnaire.questionnaire_id, draft.response_id);
+    try {
+      return await this.sendVerificationCode(row, respondent, sourceIp);
+    } catch (error) {
+      this.db?.prepare("DELETE FROM responses WHERE id = ? AND status = 'draft'").run(row.id);
+      throw error;
+    }
+  }
+
+  confirmMcpEmailVerification({ questionnaireId, responseId, email, code }) {
+    return this.confirmVerificationCode(this.mcpResponseRow(questionnaireId, responseId), email, code);
   }
 
   listResponses(id, { revision, status, limit = 50, offset = 0 } = {}) {
     const questionnaireId = this.validateId(id);
     this.get(questionnaireId, revision);
-    const conditions = ["questionnaire_id = ?"];
+    const conditions = ["r.questionnaire_id = ?"];
     const parameters = [questionnaireId];
-    if (revision !== undefined) { conditions.push("revision = ?"); parameters.push(this.validateRevision(revision)); }
+    if (revision !== undefined) { conditions.push("r.revision = ?"); parameters.push(this.validateRevision(revision)); }
     if (status !== undefined) {
       if (!["draft", "submitted"].includes(status)) throw serviceError("status must be draft or submitted");
-      conditions.push("status = ?"); parameters.push(status);
+      conditions.push("r.status = ?"); parameters.push(status);
     }
     const safeLimit = Math.max(1, Math.min(Number.isSafeInteger(limit) ? limit : 50, 200));
     const safeOffset = Math.max(0, Number.isSafeInteger(offset) ? offset : 0);
     const where = conditions.join(" AND ");
-    const rows = this.db.prepare(`SELECT id, questionnaire_id, revision, status, respondent_name, respondent_email, version, created_at, updated_at, submitted_at FROM responses WHERE ${where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`).all(...parameters, safeLimit, safeOffset);
-    const total = Number(this.db.prepare(`SELECT count(*) AS count FROM responses WHERE ${where}`).get(...parameters).count);
+    const rows = this.db.prepare(`${RESPONSE_SELECT} WHERE ${where} ORDER BY r.created_at DESC, r.id DESC LIMIT ? OFFSET ?`).all(...parameters, safeLimit, safeOffset);
+    const total = Number(this.db.prepare(`SELECT count(*) AS count FROM responses r WHERE ${where}`).get(...parameters).count);
     return { responses: rows.map((row) => this.responseSummary(row)), total, limit: safeLimit, offset: safeOffset, has_more: safeOffset + rows.length < total };
   }
 
   getResponse(id, responseId) {
     const questionnaireId = this.validateId(id);
     const validatedResponseId = this.validateId(responseId, "Response");
-    const row = this.db.prepare("SELECT * FROM responses WHERE questionnaire_id = ? AND id = ?").get(questionnaireId, validatedResponseId);
+    const row = this.db.prepare(`${RESPONSE_SELECT} WHERE r.questionnaire_id = ? AND r.id = ?`).get(questionnaireId, validatedResponseId);
     if (!row) throw serviceError("Response not found", 404);
     return this.publicResponse(row);
   }

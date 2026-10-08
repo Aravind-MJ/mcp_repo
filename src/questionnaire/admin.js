@@ -130,13 +130,23 @@ async function renderIndex(store, config, offset, nonce) {
   return shell({ title: "Questionnaires", eyebrow: "Private index", count: `${result.total} ${result.total === 1 ? "questionnaire" : "questionnaires"}`, nonce, content: `<div class="toolbar"><span class="muted">Manage forms, links, status, and collected responses.</span><a href="/questionnaire/README.md">MCP guide</a></div><div id="copy-status" class="copy-status" role="status" aria-live="polite"></div><main class="grid">${content}</main>${previous || next ? `<nav class="pagination" aria-label="Questionnaire pages">${previous}${next}</nav>` : ""}`, script: indexScript() });
 }
 
+export function renderTrustLabel(item) {
+  switch (item.identity_status) {
+    case "anonymous": return "Anonymous";
+    case "self_reported": return "Self-reported identity";
+    case "email_verified": return "Email verified";
+    case "legacy_missing": return "Identity not collected (legacy)";
+    default: return "Not submitted yet";
+  }
+}
+
 function renderResponseList(questionnaire, result, status, nonce) {
   const id = escapeHtml(questionnaire.questionnaire_id);
   const responses = result.responses.map((item, index) => {
     const label = item.respondent?.name || `${responseStatusLabel(item.status)} · Revision ${item.revision}`;
     const details = item.respondent
-      ? `${responseStatusLabel(item.status)} · Revision ${item.revision} · ${item.respondent.email}`
-      : `${responseStatusLabel(item.status)} · Revision ${item.revision}`;
+      ? `${responseStatusLabel(item.status)} · Revision ${item.revision} · ${item.respondent.email} · ${renderTrustLabel(item)}`
+      : `${responseStatusLabel(item.status)} · Revision ${item.revision}${item.status === "submitted" ? ` · ${renderTrustLabel(item)}` : ""}`;
     return `<a class="response" href="/questionnaires/${id}/responses/${escapeHtml(item.response_id)}"><span class="number">${result.offset + index + 1}</span><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(details)}<br>${escapeHtml(formatDate(item.submitted_at || item.updated_at))} · ${escapeHtml(item.response_id)}</small></span><span class="arrow" aria-hidden="true">→</span></a>`;
   }).join("") || `<section class="empty"><h2>No ${escapeHtml(status || "")} responses</h2><p>Responses will appear here as people save or submit the form.</p></section>`;
   const query = (newOffset) => {
@@ -159,7 +169,9 @@ async function renderResponseDetail(store, questionnaire, item, config, nonce) {
   const respondent = item.respondent
     ? `<div><dt>Respondent</dt><dd>${escapeHtml(item.respondent.name)}</dd></div><div><dt>Email</dt><dd>${escapeHtml(item.respondent.email)}</dd></div>`
     : `<div><dt>Respondent</dt><dd class="muted">Not recorded</dd></div>`;
-  return shell({ title: responseStatusLabel(item.status), eyebrow: questionnaire.title, count: `Revision ${item.revision}`, nonce, content: `<div class="toolbar"><a href="/questionnaires/${id}/responses">← All responses</a><button class="button danger" type="button" data-delete-dialog="delete-response">Delete response</button></div><main class="detail"><dl class="summary"><div><dt>Status</dt><dd>${responseStatusLabel(item.status)}</dd></div>${respondent}<div><dt>Created</dt><dd>${escapeHtml(formatDate(item.created_at))}</dd></div><div><dt>Updated</dt><dd>${escapeHtml(formatDate(item.updated_at))}</dd></div><div><dt>Response ID</dt><dd><code>${responseId}</code></dd></div></dl><div class="answers">${answers}</div></main><dialog id="delete-response" aria-labelledby="delete-response-title"><div class="dialog-shell"><p class="eyebrow">Permanent action</p><h3 id="delete-response-title">Delete this response?</h3><p>The saved answers will be permanently removed. This cannot be undone.</p><div class="dialog-actions"><button type="button" class="button cancel-delete">Cancel</button><form method="post" action="/questionnaires/${id}/responses/${responseId}/delete"><input type="hidden" name="csrf_token" value="${escapeHtml(deleteToken)}"><button type="submit" class="button danger">Delete response</button></form></div></div></dialog>`, script: `const dialog=document.getElementById("delete-response");document.querySelector("[data-delete-dialog]").addEventListener("click",()=>dialog.showModal());document.querySelector(".cancel-delete").addEventListener("click",()=>dialog.close());dialog.addEventListener("click",event=>{if(event.target===dialog)dialog.close()})` });
+  const verifiedAt = item.email_verified_at ? ` (${escapeHtml(formatDate(item.email_verified_at))})` : "";
+  const trust = `<div><dt>Identity</dt><dd>${escapeHtml(renderTrustLabel(item))}${verifiedAt}</dd></div>`;
+  return shell({ title: responseStatusLabel(item.status), eyebrow: questionnaire.title, count: `Revision ${item.revision}`, nonce, content: `<div class="toolbar"><a href="/questionnaires/${id}/responses">← All responses</a><button class="button danger" type="button" data-delete-dialog="delete-response">Delete response</button></div><main class="detail"><dl class="summary"><div><dt>Status</dt><dd>${responseStatusLabel(item.status)}</dd></div>${respondent}${trust}<div><dt>Created</dt><dd>${escapeHtml(formatDate(item.created_at))}</dd></div><div><dt>Updated</dt><dd>${escapeHtml(formatDate(item.updated_at))}</dd></div><div><dt>Response ID</dt><dd><code>${responseId}</code></dd></div></dl><div class="answers">${answers}</div></main><dialog id="delete-response" aria-labelledby="delete-response-title"><div class="dialog-shell"><p class="eyebrow">Permanent action</p><h3 id="delete-response-title">Delete this response?</h3><p>The saved answers will be permanently removed. This cannot be undone.</p><div class="dialog-actions"><button type="button" class="button cancel-delete">Cancel</button><form method="post" action="/questionnaires/${id}/responses/${responseId}/delete"><input type="hidden" name="csrf_token" value="${escapeHtml(deleteToken)}"><button type="submit" class="button danger">Delete response</button></form></div></div></dialog>`, script: `const dialog=document.getElementById("delete-response");document.querySelector("[data-delete-dialog]").addEventListener("click",()=>dialog.showModal());document.querySelector(".cancel-delete").addEventListener("click",()=>dialog.close());dialog.addEventListener("click",event=>{if(event.target===dialog)dialog.close()})` });
 }
 
 export function mountQuestionnaireAdminRoutes(app, store, config) {

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir } from "node:fs/promises";
+import { chmod, mkdir, access, rename } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { DEFAULT_JEV_MODEL, decisionMetadata } from "./client.js";
+import { DEFAULT_DECISION_MODEL, decisionMetadata } from "./client.js";
 
 const METADATA_COLUMNS = ["served_model", "provider", "generation_id", "input_tokens", "output_tokens", "total_tokens", "cost_usd"];
 const MAX_ERROR_MESSAGE_LENGTH = 1_000;
@@ -68,10 +68,10 @@ function responseError(message) {
   return message.result?.content?.find?.((item) => item?.type === "text")?.text;
 }
 
-function requestedModel(params) {
+function requestedModel(params, defaultModel) {
   if (params.name !== "make_decisions" || !isPlainObject(params.arguments)) return null;
   const { model } = params.arguments;
-  if (model === undefined) return DEFAULT_JEV_MODEL;
+  if (model === undefined) return defaultModel;
   return typeof model === "string" ? model : null;
 }
 
@@ -128,18 +128,27 @@ class AuditedToolCalls {
     try {
       this.log.finish(entry, outcome);
     } catch (error) {
-      console.error(`Jev audit log could not finalize call ${entry.id}: ${error.message}`);
+      console.error(`Decision audit log could not finalize call ${entry.id}: ${error.message}`);
     }
   }
 }
 
-export class JevAuditLog {
+export class DecisionAuditLog {
   constructor(config) {
-    this.databasePath = path.join(config.dataDir, "jev", "audit.sqlite3");
+    this.databasePath = path.join(config.dataDir, "decisions", "audit.sqlite3");
+    this.legacyDirectory = path.join(config.dataDir, "jev");
     this.db = null;
   }
 
   async initialize() {
+    // Rename the retired module directory once, preserving its complete SQLite history.
+    try {
+      await access(path.dirname(this.databasePath));
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      try { await rename(this.legacyDirectory, path.dirname(this.databasePath)); }
+      catch (migrationError) { if (migrationError.code !== "ENOENT") throw migrationError; }
+    }
     await mkdir(path.dirname(this.databasePath), { recursive: true, mode: 0o700 });
     await chmod(path.dirname(this.databasePath), 0o700);
     this.db = new DatabaseSync(this.databasePath);
@@ -182,7 +191,7 @@ export class JevAuditLog {
     this.db = null;
   }
 
-  receive(body) {
+  receive(body, defaultModel = DEFAULT_DECISION_MODEL) {
     const messages = Array.isArray(body) ? body : [body];
     // Responses are matched to calls by JSON-RPC ID, so a reused ID makes a call unattributable.
     const idUses = new Map();
@@ -209,7 +218,7 @@ export class JevAuditLog {
             storedRequestId(message.id),
             typeof params.name === "string" ? params.name : null,
             params.arguments === undefined ? null : JSON.stringify(params.arguments),
-            requestedModel(params),
+            requestedModel(params, defaultModel),
             rejected ? "failure" : "pending",
             startedAtText,
             rejected ? startedAtText : null,
@@ -223,7 +232,7 @@ export class JevAuditLog {
         throw error;
       }
     } catch (error) {
-      console.error(`Jev audit log could not record tool calls: ${error.message}`);
+      console.error(`Decision audit log could not record tool calls: ${error.message}`);
       return new AuditedToolCalls(this, []);
     }
     return new AuditedToolCalls(this, entries);
