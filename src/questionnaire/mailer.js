@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import nodemailer from "nodemailer";
 import addressparser from "nodemailer/lib/addressparser";
 import { ServiceError } from "../errors.js";
+import { renderVerificationEmail } from "./email-template.js";
 
 const UNAVAILABLE = "Email verification is unavailable right now. No code was sent.";
 const FAILED = "The verification email could not be sent. No code was sent; try again later.";
@@ -51,15 +52,7 @@ export function createSmtpMailer(settings = {}) {
         await transport.sendMail({
           from,
           to,
-          subject: "Your questionnaire verification code",
-          text: [
-            `Your verification code for "${questionnaireTitle}" is:`,
-            "",
-            `    ${code}`,
-            "",
-            `The code expires in ${expiresInMinutes} minutes and works once.`,
-            "If you did not request this code, you can ignore this email.",
-          ].join("\n"),
+          ...renderVerificationEmail({ code, questionnaireTitle, expiresInMinutes }),
         });
       } catch (error) {
         console.error(`questionnaire verification email delivery failed${error?.code ? ` (${error.code})` : ""}`);

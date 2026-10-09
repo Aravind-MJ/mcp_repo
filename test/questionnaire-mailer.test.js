@@ -111,6 +111,9 @@ test("delivers a plain-text code through SMTP using the password file", async ()
   assert.match(message.data, /482913/);
   assert.match(message.data, /Team survey/);
   assert.match(message.data, /10 minutes/);
+  assert.match(message.data, /Content-Type: multipart\/alternative/);
+  assert.match(message.data, /Content-Type: text\/plain/);
+  assert.match(message.data, /Content-Type: text\/html/);
   assert.deepEqual(smtp.state.auth, ["\0forms@example.com\0app-password-fixture"]);
   assert.doesNotMatch(logs.join("\n"), /482913|app-password-fixture/);
 });
