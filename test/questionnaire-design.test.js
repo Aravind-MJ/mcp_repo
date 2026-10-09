@@ -37,3 +37,14 @@ test('new details layout preserves closed state and disabled-progress settings',
   assert.doesNotMatch(noProgress,/role="progressbar"/);
   assert.match(noProgress,/Send feedback/);
 });
+
+test('theme outer header, layout and form columns fill the viewport minus gutters', () => {
+  const html=renderQuestionnaire(definition(),'design-test-nonce');
+  const rule=name=>(html.match(new RegExp(`(?:^|\\n)\\.${name}\\s*\\{[^}]*\\}`))||[''])[0];
+  for(const name of ['topbar-inner','layout'])assert.match(rule(name),/width:\s*calc\(100% - var\(--gutter\) \* 2\)/,`${name} spans the gutters`);
+  assert.doesNotMatch(rule('topbar-inner')+rule('layout'),/1220px/);
+  assert.doesNotMatch(rule('form-column'),/max-width:\s*800px/);
+  assert.match(rule('layout'),/grid-template-columns:\s*254px minmax\(0, 1fr\)/);
+  assert.match(html,/\.text-control\.compact\s*\{\s*max-width:\s*360px/);
+  assert.match(html,/@media \(max-width: 800px\)/);
+});

@@ -6,6 +6,7 @@ import { ServiceError } from "../errors.js";
 import { createQuestionnaireSignedUrl } from "../security.js";
 import { QuestionnaireAttachments } from "./attachments.js";
 import { createSmtpMailer } from "./mailer.js";
+import { RichTextError, hasMeaningfulText, normalizeRichText, richTextIsEmpty, richTextPlainText } from "./rich-text.js";
 
 export const QUESTIONNAIRE_ID_PATTERN = /^[A-Za-z0-9]{24}$/;
 const MAX_QUESTION_NESTING_DEPTH = 8;
@@ -243,6 +244,18 @@ function normalizeRowFields(raw, id) {
   });
 }
 
+// long_text accepts one opt-in setting; plain definitions keep no settings at all.
+function normalizeLongTextSettings(raw, id) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw serviceError(`${id}.settings must be an object`);
+  if (Object.keys(raw).some((key) => key !== "rich_text")) throw serviceError(`${id}.settings may only contain rich_text`);
+  if (raw.rich_text !== undefined && typeof raw.rich_text !== "boolean") throw serviceError(`${id}.settings.rich_text must be a boolean`);
+  return raw.rich_text ? { rich_text: true } : null;
+}
+
+function isRichTextQuestion(question) {
+  return question.type === "long_text" && question.settings?.rich_text === true;
+}
+
 // Shared by top-level questions and repeatable row fields: identity, labels, validation, and type settings.
 function normalizeTypedQuestion(question, path) {
   const id = cleanSingleLine(question.id, `${path}.id`, 64, { required: true });
@@ -292,6 +305,10 @@ function normalizeTypedQuestion(question, path) {
     };
   }
   if (type === "file_upload") normalized.settings = normalizeUploadSettings(question.settings, id);
+  if (type === "long_text" && question.settings !== undefined) {
+    const settings = normalizeLongTextSettings(question.settings, id);
+    if (settings) normalized.settings = settings;
+  }
   return normalized;
 }
 
@@ -376,6 +393,9 @@ const NO_ATTACHMENTS = () => false;
 function validateOneAnswer(question, value, { final = false, owns = NO_ATTACHMENTS, location } = {}) {
   if (isBlank(value)) return value;
   const validation = question.validation || {};
+  if (isRichTextQuestion(question) && typeof value !== "string") return validateRichAnswer(question, value, { final });
+  // A plain-string fallback on a rich question stays a string, but invisible-only text is no answer, as for documents.
+  if (isRichTextQuestion(question) && !hasMeaningfulText(value)) return undefined;
   if (TEXT_TYPES.has(question.type)) {
     if (typeof value !== "string") answerError(question, "answer must be text");
     const cleaned = value.replace(/\r\n?/g, "\n");
@@ -471,13 +491,30 @@ function validateOneAnswer(question, value, { final = false, owns = NO_ATTACHMEN
   answerError(question, "unsupported answer type");
 }
 
+// Opt-in rich answers: a normalized Delta, or no answer when nothing visible remains. Lengths count visible text.
+function validateRichAnswer(question, value, { final }) {
+  let document;
+  try {
+    document = normalizeRichText(value);
+  } catch (error) {
+    if (error instanceof RichTextError) answerError(question, error.message);
+    throw error;
+  }
+  const text = richTextPlainText(document);
+  if (!hasMeaningfulText(text)) return undefined;
+  const validation = question.validation || {};
+  if (final && validation.min_length !== undefined && text.length < validation.min_length) answerError(question, `answer must contain at least ${validation.min_length} characters`);
+  if (validation.max_length !== undefined && text.length > validation.max_length) answerError(question, `answer must contain at most ${validation.max_length} characters`);
+  return document;
+}
+
 // The error-path prefix for a row field: "<question>[<1-based row>].<field>".
 function rowFieldPath(question, rowNumber, fieldId) {
   return fieldId ? `${question.id}[${rowNumber}].${fieldId}` : `${question.id}[${rowNumber}]`;
 }
 
 function assertRequiredAnswer(question, value) {
-  if (isBlank(value) || (question.type === "consent" && value !== true)) {
+  if (isBlank(value) || (question.type === "consent" && value !== true) || (isRichTextQuestion(question) && richTextIsEmpty(value))) {
     answerError(question, question.type === "repeatable_rows" ? `add at least ${Math.max(1, question.settings.min_rows)} ${Math.max(1, question.settings.min_rows) === 1 ? "row" : "rows"}` : "an answer is required");
   }
   if (question.type === "ranking" && value.length !== question.options.length) answerError(question, "rank every option");
@@ -508,7 +545,8 @@ function validateRows(question, value, { final, owns }) {
       const fieldValue = values[field.id];
       if (final && field.required) assertRequiredAnswer(scoped, fieldValue);
       const location = { question_id: question.id, row_id: row.row_id, field_id: field.id };
-      if (fieldValue !== undefined) cleaned[field.id] = validateOneAnswer(scoped, fieldValue, { final, owns, location });
+      const cleanedValue = fieldValue === undefined ? undefined : validateOneAnswer(scoped, fieldValue, { final, owns, location });
+      if (cleanedValue !== undefined) cleaned[field.id] = cleanedValue;
     }
     return { row_id: row.row_id, values: cleaned };
   });
@@ -537,7 +575,8 @@ export function validateAnswers(questions, raw, { final = false, owns = NO_ATTAC
       const value = raw[question.id];
       if (final && question.required) assertRequiredAnswer(question, value);
       const location = { question_id: question.id, row_id: "", field_id: "" };
-      if (value !== undefined) answers[question.id] = validateOneAnswer(question, value, { final, owns, location });
+      const cleaned = value === undefined ? undefined : validateOneAnswer(question, value, { final, owns, location });
+      if (cleaned !== undefined) answers[question.id] = cleaned;
       if (question.children) visit(question.children, active, answers[question.id]);
     }
   };

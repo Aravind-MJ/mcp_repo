@@ -8,11 +8,16 @@ import {
   questionnaireResponseScopeIsValid,
   questionnaireSignedUrlIsValid,
 } from "../security.js";
-import { renderQuestionnaire } from "./ui.js";
+import { QUILL_ASSET_PATH, QUILL_VERSION, renderQuestionnaire } from "./ui.js";
 import { QUESTIONNAIRE_LANDING_HTML } from "../module-landings.js";
 
 const INSTALL_README = await readFile(new URL("../../public/questionnaire-README.md", import.meta.url), "utf8");
 const COMPANION_SKILL = await readFile(new URL("../../public/questionnaire-SKILL.md", import.meta.url), "utf8");
+// The one editor bundle answer pages may load. The installed package must match the pinned version.
+const QUILL_PACKAGE = JSON.parse(await readFile(new URL("../../node_modules/quill/package.json", import.meta.url), "utf8"));
+if (QUILL_PACKAGE.version !== QUILL_VERSION) throw new Error(`Expected quill ${QUILL_VERSION}, found ${QUILL_PACKAGE.version}`);
+const QUILL_BUNDLE = (await readFile(new URL("../../node_modules/quill/dist/quill.js", import.meta.url), "utf8"))
+  .replace(/\n?\/\/# sourceMappingURL=\S*\s*$/, "\n");
 
 
 function baseHeaders(response) {
@@ -109,6 +114,12 @@ export function mountQuestionnaireRoutes(app, store, config) {
   const previews = ["/questionnaire/:questionnaireId/responses/:responseId/attachments/:attachmentId", "/questionnaire/:questionnaireId/r/:revision/responses/:responseId/attachments/:attachmentId"];
   const attachments = store.attachments;
 
+  app.get(QUILL_ASSET_PATH, (request, response) => {
+    baseHeaders(response);
+    response.set("Cache-Control", "public, max-age=31536000, immutable");
+    response.set("Cross-Origin-Resource-Policy", "same-origin");
+    response.type("text/javascript").send(QUILL_BUNDLE);
+  });
   app.get(["/questionnaire", "/questionnaire/"], (request, response) => {
     baseHeaders(response);
     response.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");

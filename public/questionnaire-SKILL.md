@@ -47,7 +47,7 @@ Omit unchanged fields during an update. Use `get_questionnaire_signed_url` witho
 
 ## Question types
 
-- `short_text`, `long_text`, `email`, `url`, `phone`
+- `short_text`, `long_text`, `email`, `url`, `phone` (`long_text` accepts `settings: { "rich_text": true }`; answers are then `{ "format": "quill_delta_v1", "ops": [...] }` documents or plain strings, see the README)
 - `number`, `date`, `time`, `datetime`
 - `single_choice`, `multiple_choice`, `dropdown`, `yes_no`, `consent`
 - `rating`, `scale`, `ranking`, `matrix`

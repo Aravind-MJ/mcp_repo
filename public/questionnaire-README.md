@@ -129,6 +129,27 @@ Conditions are explicit; numbering and adjacent placement never imply a relation
 
 ## File uploads
 
+### Rich text for `long_text`
+
+A `long_text` question can opt in to a small formatting editor with `"settings": { "rich_text": true }`. Respondents get bold, italic, numbered and bulleted lists, and http(s) links. Headings, colours, images, embeds, and raw HTML are not available, and paste always inserts plain text.
+
+Rich answers are stored as a restricted Quill Delta, never as HTML:
+
+```json
+{ "format": "quill_delta_v1", "ops": [
+  { "insert": "Ground floor " },
+  { "insert": "renovated", "attributes": { "bold": true } },
+  { "insert": "\nNew boiler" },
+  { "insert": "\n", "attributes": { "list": "bullet" } }
+] }
+```
+
+- `ops` contains only text `insert` operations. Allowed attributes are `bold: true`, `italic: true`, `link` (an absolute http or https URL without credentials, up to 2048 characters), and `list` (`"ordered"` or `"bullet"`, only on a line-break insert).
+- The server rejects anything else and normalizes accepted documents: adjacent operations with the same formatting are merged and the document always ends with a line break. Documents are limited to 2,000 operations and 64 KiB.
+- `required`, `min_length`, and `max_length` count the visible text. A document holding only whitespace or invisible characters counts as no answer.
+- A plain string is still a valid answer to a rich question and is kept as an unformatted string. Plain `long_text` questions are unchanged and reject Delta documents.
+- `get_questionnaire_response` returns the document as stored. The private response page renders it from an allow-list with escaped text.
+
 A `file_upload` question collects JPEG, PNG, or WebP images. Its optional `settings`:
 
 | Setting | Default | Allowed |

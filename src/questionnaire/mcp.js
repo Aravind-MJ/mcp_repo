@@ -57,11 +57,12 @@ const uploadSettings = z.object({
 }).strict();
 // Every answerable type, built on either the top-level question base or the row-field base.
 function typedQuestions(base) {
-  const textQuestion = (type) => z.object({
+  const textQuestion = (type, extra = {}) => z.object({
     ...base,
     type: z.literal(type),
     placeholder: z.string().max(200).optional(),
     validation: textValidation.optional(),
+    ...extra,
   }).strict();
   const simpleQuestion = (type) => z.object({ ...base, type: z.literal(type) }).strict();
   const optionQuestion = (type, maximum = 100) => z.object({
@@ -70,7 +71,13 @@ function typedQuestions(base) {
     options: z.array(optionSchema).min(2).max(maximum),
   }).strict();
   return [
-    textQuestion("short_text"), textQuestion("long_text"), textQuestion("email"), textQuestion("url"), textQuestion("phone"),
+    textQuestion("short_text"),
+    textQuestion("long_text", {
+      settings: z.object({
+        rich_text: z.boolean().optional().describe("Opt in to a bold/italic/list/link editor. Answers become { format: \"quill_delta_v1\", ops } documents; plain-string answers remain valid. Defaults to false."),
+      }).strict().optional(),
+    }),
+    textQuestion("email"), textQuestion("url"), textQuestion("phone"),
     z.object({ ...base, type: z.literal("number"), validation: numberValidation.optional() }).strict(),
     simpleQuestion("date"), simpleQuestion("time"), simpleQuestion("datetime"),
     optionQuestion("single_choice"),

@@ -17,6 +17,16 @@ const FORMAT_TYPES = { jpeg: "image/jpeg", png: "image/png", webp: "image/webp" 
 // Mirrors UPLOAD_LIMITS retention in attachments.js.
 const UPLOAD_RETENTION_COPY = "Images are private to the questionnaire owner, and camera and location metadata is removed. Unsubmitted drafts with images are deleted after 7 days without activity, and removed images are deleted after 24 hours.";
 const ROW_TOKEN = "__ROWID__";
+// The pinned editor bundle is served locally from node_modules; see mountQuestionnaireRoutes.
+export const QUILL_VERSION = "2.0.3";
+export const QUILL_ASSET_PATH = `/questionnaire/assets/quill-${QUILL_VERSION}.js`;
+const RICH_FORMATS = [
+  { format: "bold", label: "Bold", shortcut: "Ctrl+B", glyph: "<b>B</b>" },
+  { format: "italic", label: "Italic", shortcut: "Ctrl+I", glyph: "<i>I</i>" },
+  { format: "ordered", label: "Numbered list", glyph: "1." },
+  { format: "bullet", label: "Bulleted list", glyph: "•" },
+  { format: "link", label: "Link", glyph: "Link" },
+];
 
 function listWords(items) {
   if (items.length <= 1) return items.join("");
@@ -29,10 +39,27 @@ function formatMegabytes(bytes) {
   return Number.isInteger(value) ? `${value} MB` : value >= 1 ? `${value.toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
 }
 
-function hasQuestionType(questions, type) {
-  return questions.some((question) => question.type === type
-    || (question.fields || []).some((field) => field.type === type)
-    || hasQuestionType(question.children || [], type));
+function hasQuestion(questions, predicate) {
+  return questions.some((question) => predicate(question)
+    || (question.fields || []).some(predicate)
+    || hasQuestion(question.children || [], predicate));
+}
+
+function isRichText(question) {
+  return question.type === "long_text" && question.settings?.rich_text === true;
+}
+
+// Opt-in rich long_text: a Quill mount with an allow-listed toolbar. Answers are Delta documents, never HTML.
+function renderRichText(question, { describedBy, titleId }) {
+  const id = escapeHtml(question.id);
+  const validation = question.validation || {};
+  const limits = `${validation.min_length !== undefined ? ` data-min-length="${validation.min_length}"` : ""}${validation.max_length !== undefined ? ` data-max-length="${validation.max_length}"` : ""}`;
+  const buttons = RICH_FORMATS.map(({ format, label, shortcut, glyph }, index) => `<button type="button" class="rich-button" data-rich-format="${format}" aria-label="${label}"${format === "link" ? ' aria-haspopup="true" aria-expanded="false"' : ' aria-pressed="false"'} title="${shortcut ? `${label} (${shortcut})` : label}"${index ? ' tabindex="-1"' : ""}><span aria-hidden="true">${glyph}</span></button>`).join("");
+  return `<div class="rich-text" data-rich-text="${id}"${question.required ? ' data-required="true"' : ""}${limits}>
+    <div class="rich-toolbar" role="toolbar" aria-label="Formatting for ${escapeHtml(question.title)}" aria-controls="q-${id}">${buttons}</div>
+    <div class="rich-link" data-rich-link hidden><label><span>Link address</span><input class="text-control" type="text" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://" data-rich-link-input></label><span class="rich-link-actions"><button type="button" class="rich-link-button primary" data-rich-link-apply>Apply link</button><button type="button" class="rich-link-button" data-rich-link-remove>Remove link</button><button type="button" class="rich-link-button" data-rich-link-cancel>Cancel</button></span></div>
+    <div class="rich-editor" id="q-${id}" data-rich-editor aria-labelledby="${titleId}" aria-describedby="${describedBy}"${question.required ? ' aria-required="true"' : ""}></div>
+  </div>${validation.max_length !== undefined ? `<div class="character-count" id="question-count-${id}" data-count-for="${id}"></div>` : ""}`;
 }
 
 function renderUpload(question, { describedBy, titleId, groupId = question.id, fieldId = "" }) {
@@ -42,7 +69,7 @@ function renderUpload(question, { describedBy, titleId, groupId = question.id, f
   const hintId = `upload-hint-${id}`;
   const hint = `${listWords(formats.map((format) => FORMAT_LABELS[format]))} · up to ${formatMegabytes(maxBytes)} · ${maxFiles === 1 ? "1 image" : `up to ${maxFiles} images`}`;
   return `<div class="upload-field" data-upload="${id}" data-upload-question="${escapeHtml(groupId)}" data-upload-field="${escapeHtml(fieldId)}" data-min-files="${minimum}" data-max-files="${maxFiles}" data-max-bytes="${maxBytes}" data-formats="${formats.join(",")}">
-    <div class="upload-picker"><input class="upload-input" type="file" id="q-${id}" accept="${formats.map((format) => FORMAT_TYPES[format]).join(",")}"${maxFiles > 1 ? " multiple" : ""} aria-labelledby="${titleId}" aria-describedby="${hintId} ${describedBy}"><p class="field-hint" id="${hintId}">${hint}</p></div>
+    <label class="upload-dropzone" for="q-${id}" data-dropzone><input class="upload-input" type="file" id="q-${id}" accept="${formats.map((format) => FORMAT_TYPES[format]).join(",")}"${maxFiles > 1 ? " multiple" : ""} aria-labelledby="${titleId}" aria-describedby="${hintId} ${describedBy}"><span class="upload-drop-copy" aria-hidden="true">Drag ${maxFiles === 1 ? "an image" : "images"} here or <span class="upload-browse">browse</span></span><span class="field-hint" id="${hintId}">${hint}</span></label>
     <ul class="upload-list" data-upload-list></ul>
   </div>`;
 }
@@ -113,7 +140,8 @@ function renderControl(question, scope = {}) {
   const group = ` role="group" aria-labelledby="${titleId}" aria-describedby="${describedBy}"`;
   switch (question.type) {
     case "short_text": return `<input class="text-control" type="text" name="${id}"${common}>`;
-    case "long_text": return `<textarea class="text-control" name="${id}"${common} rows="5"></textarea><div class="character-count" id="question-count-${id}" data-count-for="${id}"></div>`;
+    case "long_text": if (isRichText(question)) return renderRichText(question, { describedBy, titleId });
+      return `<textarea class="text-control" name="${id}"${common} rows="5"></textarea><div class="character-count" id="question-count-${id}" data-count-for="${id}"></div>`;
     case "email": return `<input class="text-control" type="email" name="${id}"${common} inputmode="email" autocomplete="email">`;
     case "url": return `<input class="text-control" type="url" name="${id}"${common} inputmode="url">`;
     case "phone": return `<input class="text-control" type="tel" name="${id}"${common} inputmode="tel" autocomplete="tel">`;
@@ -273,6 +301,260 @@ const CLIENT_SCRIPT = String.raw`
   function scopedName(group, rowId, field) { return group.id + "__" + rowId + "__" + field.id; }
   function uploadField(name) { return form.querySelector('[data-upload="' + CSS.escape(name) + '"]'); }
   function uploadIds(field) { try { return JSON.parse(field.dataset.attachments || "[]"); } catch { return []; } }
+  // Opt-in rich long_text. One Quill instance per scoped name; answers are restricted Delta documents.
+  const RICH_FORMAT = "quill_delta_v1";
+  const RICH_INVISIBLE = /[\s­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁯ㅤ︀-️﻿ﾠ]/gu;
+  const RICH_CONTROLS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
+  const richEditors = new Map();
+  function isRichQuestion(question) { return question.type === "long_text" && Boolean(question.settings && question.settings.rich_text); }
+  function richSafeLink(value) {
+    if (typeof value !== "string" || !value || value.length > 2048 || /[\s\u0000-\u001F\u007F]/.test(value) || !/^https?:\/\//i.test(value)) return null;
+    try {
+      const parsed = new URL(value);
+      if (!/^https?:$/.test(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password || parsed.href.length > 2048) return null;
+      return parsed.href;
+    } catch { return null; }
+  }
+  // Mirrors the server allow-list so autosave never sends formatting the server would reject.
+  function cleanRichOps(ops) {
+    const cleaned = [];
+    for (const op of ops || []) {
+      if (!op || typeof op.insert !== "string") continue;
+      const text = op.insert.replace(/\r\n?/g, "\n").replace(RICH_CONTROLS, "");
+      if (!text) continue;
+      const source = op.attributes || {};
+      const attributes = {};
+      if (/^\n+$/.test(text)) {
+        if (source.list === "ordered" || source.list === "bullet") attributes.list = source.list;
+      } else {
+        if (source.bold === true) attributes.bold = true;
+        if (source.italic === true) attributes.italic = true;
+        const link = richSafeLink(source.link);
+        if (link) attributes.link = link;
+      }
+      cleaned.push(Object.keys(attributes).length ? { insert: text, attributes: attributes } : { insert: text });
+    }
+    if (!cleaned.length || !cleaned[cleaned.length - 1].insert.endsWith("\n")) cleaned.push({ insert: "\n" });
+    return cleaned;
+  }
+  function richOpsText(ops) { return ops.map(function (op) { return typeof op.insert === "string" ? op.insert : ""; }).join("").replace(/\n$/, ""); }
+  function meaningful(text) { return String(text).replace(RICH_INVISIBLE, "").length > 0; }
+  function richText(editor) {
+    if (editor.fallback !== null) return editor.fallback;
+    return editor.quill ? editor.quill.getText().replace(/\n$/, "") : editor.textarea.value;
+  }
+  function readRich(editor) {
+    if (editor.fallback !== null) return editor.fallback === "" ? undefined : editor.fallback;
+    if (!editor.quill) return editor.textarea.value === "" ? undefined : editor.textarea.value;
+    if (!meaningful(richText(editor))) return undefined;
+    return { format: RICH_FORMAT, ops: cleanRichOps(editor.quill.getContents().ops) };
+  }
+  // "silent" keeps hydration from emitting text-change, so restoring a draft never marks it dirty.
+  function writeRich(editor, value) {
+    if (!editor.quill) {
+      editor.textarea.value = typeof value === "string" ? value : richOpsText((value && value.ops) || []);
+      return;
+    }
+    if (typeof value === "string") {
+      editor.quill.setText(value, "silent");
+      editor.fallback = value;
+    } else if (value && Array.isArray(value.ops)) {
+      editor.quill.setContents(cleanRichOps(value.ops), "silent");
+      editor.fallback = null;
+    }
+    updateRichToolbar(editor);
+  }
+  function richTextProblem(question, text, required) {
+    const validation = question.validation || {};
+    if (!meaningful(text)) return required ? "This answer is required." : "";
+    if (validation.min_length !== undefined && text.length < validation.min_length) return "Enter at least " + validation.min_length + " characters.";
+    if (validation.max_length !== undefined && text.length > validation.max_length) return "Enter no more than " + validation.max_length + " characters.";
+    return "";
+  }
+  function richDisabled(editor) {
+    const probe = editor.wrap.querySelector(".rich-toolbar button");
+    return !probe || probe.matches(":disabled");
+  }
+  function syncRichEditors() {
+    for (const [name, editor] of richEditors) {
+      if (!editor.wrap.isConnected) { richEditors.delete(name); continue; }
+      const disabled = richDisabled(editor);
+      if (editor.quill) {
+        if (editor.quill.isEnabled() === disabled) editor.quill.enable(!disabled);
+        editor.quill.root.setAttribute("aria-disabled", disabled ? "true" : "false");
+      } else editor.textarea.disabled = disabled;
+      if (disabled) closeRichLink(editor, false);
+    }
+  }
+  function updateRichToolbar(editor) {
+    if (!editor.quill) return;
+    const range = editor.quill.getSelection();
+    const formats = range ? editor.quill.getFormat(range) : {};
+    for (const button of editor.wrap.querySelectorAll("[data-rich-format]")) {
+      const format = button.dataset.richFormat;
+      if (format === "link") continue;
+      const active = format === "ordered" || format === "bullet" ? formats.list === format : formats[format] === true;
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    }
+  }
+  function richChanged(editor) {
+    editor.fallback = null;
+    const fieldError = document.querySelector('[data-error-for="' + CSS.escape(editor.name) + '"]');
+    if (fieldError) fieldError.textContent = "";
+    if (editor.quill) editor.quill.root.removeAttribute("aria-invalid");
+    updateRichToolbar(editor); updateProgress(); scheduleSave();
+  }
+  // Paste and drop insert plain text only: no markup, images, or styles from the source.
+  function insertPlainText(editor, text) {
+    const quill = editor.quill;
+    if (!quill.isEnabled()) return;
+    const clean = String(text || "").replace(/\r\n?/g, "\n").replace(RICH_CONTROLS, "");
+    const range = quill.getSelection(true) || { index: quill.getLength() - 1, length: 0 };
+    if (range.length) quill.deleteText(range.index, range.length, "user");
+    if (clean) quill.insertText(range.index, clean, "user");
+    quill.setSelection(range.index + clean.length, 0, "silent");
+  }
+  function closeRichLink(editor, refocus) {
+    const panel = editor.wrap.querySelector("[data-rich-link]");
+    if (!panel || panel.hidden) return;
+    panel.hidden = true;
+    editor.wrap.querySelector('[data-rich-format="link"]').setAttribute("aria-expanded", "false");
+    editor.linkRange = null;
+    if (refocus && editor.quill) editor.quill.focus();
+  }
+  function richMessage(editor, message) {
+    const fieldError = document.querySelector('[data-error-for="' + CSS.escape(editor.name) + '"]');
+    if (fieldError) fieldError.textContent = message || "";
+  }
+  function openRichLink(editor) {
+    const quill = editor.quill;
+    const range = quill.getSelection(true);
+    if (!range || !range.length) { richMessage(editor, "Select the text you want to link first."); return; }
+    const panel = editor.wrap.querySelector("[data-rich-link]");
+    const input = panel.querySelector("[data-rich-link-input]");
+    editor.linkRange = range;
+    input.value = quill.getFormat(range).link || "";
+    panel.hidden = false;
+    editor.wrap.querySelector('[data-rich-format="link"]').setAttribute("aria-expanded", "true");
+    richMessage(editor, "");
+    input.focus();
+  }
+  function applyRichLink(editor, remove) {
+    const range = editor.linkRange;
+    if (!range) { closeRichLink(editor, true); return; }
+    if (remove) {
+      editor.quill.formatText(range.index, range.length, "link", false, "user");
+    } else {
+      const input = editor.wrap.querySelector("[data-rich-link-input]");
+      const link = richSafeLink(input.value.trim());
+      if (!link) { richMessage(editor, "Enter a full link that starts with http:// or https://."); input.focus(); return; }
+      editor.quill.formatText(range.index, range.length, "link", link, "user");
+    }
+    closeRichLink(editor, true);
+    editor.quill.setSelection(range.index + range.length, 0, "silent");
+  }
+  function initRichEditor(wrap) {
+    if (wrap.dataset.richReady === "true") return;
+    wrap.dataset.richReady = "true";
+    const name = wrap.dataset.richText;
+    const mount = wrap.querySelector("[data-rich-editor]");
+    const editor = { name: name, wrap: wrap, quill: null, textarea: null, fallback: null, linkRange: null };
+    richEditors.set(name, editor);
+    if (!window.Quill) {
+      // Without the editor bundle the answer is still collected, as plain text.
+      const textarea = document.createElement("textarea");
+      textarea.className = "text-control";
+      textarea.name = name;
+      textarea.rows = 5;
+      for (const attribute of ["id", "aria-labelledby", "aria-describedby", "aria-required"]) if (mount.hasAttribute(attribute)) textarea.setAttribute(attribute, mount.getAttribute(attribute));
+      wrap.querySelector(".rich-toolbar").hidden = true;
+      mount.replaceWith(textarea);
+      editor.textarea = textarea;
+      return;
+    }
+    const quill = new window.Quill(mount, {
+      formats: ["bold", "italic", "link", "list"],
+      modules: {
+        toolbar: false,
+        uploader: { mimetypes: [], handler: function () {} },
+        // Tab leaves the editor, and typed list markers stay text; no indent, tab, or checklist formats.
+        keyboard: { bindings: { tab: null, indent: null, outdent: null, "outdent backspace": null, "indent code-block": null, "outdent code-block": null, "remove tab": null, "list autofill": null, "checklist enter": null, "header enter": null } },
+      },
+    });
+    editor.quill = quill;
+    const root = quill.root;
+    root.setAttribute("role", "textbox");
+    root.setAttribute("aria-multiline", "true");
+    for (const attribute of ["aria-labelledby", "aria-describedby", "aria-required"]) {
+      if (mount.hasAttribute(attribute)) { root.setAttribute(attribute, mount.getAttribute(attribute)); mount.removeAttribute(attribute); }
+    }
+    mount.addEventListener("paste", function (event) {
+      event.preventDefault(); event.stopPropagation();
+      insertPlainText(editor, event.clipboardData ? event.clipboardData.getData("text/plain") : "");
+    }, true);
+    mount.addEventListener("drop", function (event) {
+      event.preventDefault(); event.stopPropagation();
+      if (event.dataTransfer && Array.from(event.dataTransfer.types || []).includes("text/plain") && !Array.from(event.dataTransfer.types || []).includes("Files")) {
+        insertPlainText(editor, event.dataTransfer.getData("text/plain"));
+      }
+    }, true);
+    quill.on("text-change", function (delta, previous, source) { if (source === "user") richChanged(editor); });
+    quill.on("selection-change", function () { updateRichToolbar(editor); });
+    quill.enable(!richDisabled(editor));
+  }
+  function initRichEditors(scope) {
+    for (const wrap of scope.querySelectorAll("[data-rich-text]")) initRichEditor(wrap);
+  }
+  function validateRichEditors() {
+    let valid = true;
+    for (const editor of richEditors.values()) {
+      if (!editor.wrap.isConnected || richDisabled(editor) || !editor.quill) continue;
+      const question = { validation: { min_length: editor.wrap.dataset.minLength === undefined ? undefined : Number(editor.wrap.dataset.minLength), max_length: editor.wrap.dataset.maxLength === undefined ? undefined : Number(editor.wrap.dataset.maxLength) } };
+      const message = richTextProblem(question, richText(editor), editor.wrap.dataset.required === "true");
+      if (message) {
+        richMessage(editor, message);
+        editor.quill.root.setAttribute("aria-invalid", "true");
+        valid = false;
+      }
+    }
+    return valid;
+  }
+  // Delegated toolbar and link-panel controls, so editors in rows added later need no listeners of their own.
+  form.addEventListener("click", function (event) {
+    const button = event.target.closest("[data-rich-format], [data-rich-link-apply], [data-rich-link-remove], [data-rich-link-cancel]");
+    if (!button || button.disabled) return;
+    const editor = richEditors.get(button.closest("[data-rich-text]").dataset.richText);
+    if (!editor || !editor.quill || !editor.quill.isEnabled()) return;
+    if (button.hasAttribute("data-rich-link-apply")) { applyRichLink(editor, false); return; }
+    if (button.hasAttribute("data-rich-link-remove")) { applyRichLink(editor, true); return; }
+    if (button.hasAttribute("data-rich-link-cancel")) { closeRichLink(editor, true); return; }
+    const format = button.dataset.richFormat;
+    if (format === "link") { openRichLink(editor); return; }
+    const quill = editor.quill;
+    const range = quill.getSelection(true);
+    const current = quill.getFormat(range);
+    if (format === "ordered" || format === "bullet") quill.format("list", current.list === format ? false : format, "user");
+    else quill.format(format, current[format] !== true, "user");
+    updateRichToolbar(editor);
+  });
+  form.addEventListener("keydown", function (event) {
+    const linkInput = event.target.closest("[data-rich-link-input]");
+    if (linkInput) {
+      const editor = richEditors.get(linkInput.closest("[data-rich-text]").dataset.richText);
+      if (event.key === "Enter") { event.preventDefault(); if (editor) applyRichLink(editor, false); }
+      if (event.key === "Escape") { event.preventDefault(); if (editor) closeRichLink(editor, true); }
+      return;
+    }
+    // Toolbar arrow keys move a roving tab stop between the formatting buttons.
+    const button = event.target.closest(".rich-toolbar [data-rich-format]");
+    if (!button || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    const buttons = Array.from(button.parentElement.querySelectorAll("[data-rich-format]"));
+    const index = buttons.indexOf(button);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+    event.preventDefault();
+    for (const candidate of buttons) candidate.tabIndex = candidate === buttons[next] ? 0 : -1;
+    buttons[next].focus();
+  });
   function readValue(question, name) {
     if (question.type === "multiple_choice") {
       return Array.from(form.querySelectorAll('input[name="' + CSS.escape(name) + '"]:checked')).map(function (input) { return input.value; });
@@ -303,6 +585,7 @@ const CLIENT_SCRIPT = String.raw`
       const field = uploadField(name);
       return field ? uploadIds(field) : undefined;
     }
+    if (isRichQuestion(question) && richEditors.has(name)) return readRich(richEditors.get(name));
     if (question.type === "repeatable_rows") {
       const group = rowGroup(question.id);
       if (!group) return undefined;
@@ -370,10 +653,13 @@ const CLIENT_SCRIPT = String.raw`
     // Re-apply limits that visibility toggling would otherwise re-enable.
     for (const group of form.querySelectorAll("[data-rows]")) renumberRows(group);
     for (const field of form.querySelectorAll("[data-upload]")) setUploadIds(field, uploadIds(field));
+    syncRichEditors();
   }
   function isComplete(question, answers) {
     const value = answers[question.id];
     if (question.type === "consent") return value === true;
+    if (value && typeof value === "object" && !Array.isArray(value) && Array.isArray(value.ops)) return richTextProblem(question, richOpsText(value.ops), true) === "";
+    if (isRichQuestion(question) && typeof value === "string") return richTextProblem(question, value.replace(/\r\n?/g, "\n"), true) === "";
     if (question.type === "file_upload") {
       const minimum = Math.max(1, question.settings.min_files);
       return Array.isArray(value) && value.length >= minimum && value.length <= question.settings.max_files;
@@ -443,6 +729,10 @@ const CLIENT_SCRIPT = String.raw`
       const allAnswered = visibleQuestions.every(function (question) { return isComplete(question, answers); });
       nextButton.disabled = allAnswered || questionnaireFields.disabled;
       nextButton.querySelector("[data-next-label]").textContent = allAnswered ? "All shown answered" : "Next unanswered";
+    }
+    for (const editor of richEditors.values()) {
+      const counter = document.querySelector('[data-count-for="' + CSS.escape(editor.name) + '"]');
+      if (counter && editor.wrap.dataset.maxLength) counter.textContent = richText(editor).length + " / " + editor.wrap.dataset.maxLength;
     }
     for (const textarea of form.querySelectorAll("textarea[maxlength]")) {
       const counter = document.querySelector('[data-count-for="' + CSS.escape(textarea.name) + '"]');
@@ -568,6 +858,8 @@ const CLIENT_SCRIPT = String.raw`
         const input = form.querySelector('input[name="' + CSS.escape(name + "__" + row) + '"][value="' + CSS.escape(String(value[row])) + '"]');
         if (input) input.checked = true;
       }
+    } else if (isRichQuestion(question) && richEditors.has(name)) {
+      writeRich(richEditors.get(name), value);
     } else if (question.type === "file_upload" && Array.isArray(value)) {
       const field = uploadField(name);
       if (field) for (const id of value) addStoredUpload(field, id);
@@ -645,6 +937,7 @@ const CLIENT_SCRIPT = String.raw`
   }
   function validateSelections() {
     let valid = validateScalarPatterns();
+    if (!validateRichEditors()) valid = false;
     for (const group of document.querySelectorAll("[data-multiple-choice]")) {
       if (group.closest("[data-question]")?.hidden) continue;
       const count = group.querySelectorAll("input:checked").length;
@@ -757,7 +1050,9 @@ const CLIENT_SCRIPT = String.raw`
     const item = holder.content.firstElementChild;
     item.dataset.rowId = rowId;
     group.querySelector("[data-row-list]").appendChild(item);
+    initRichEditors(item);
     renumberRows(group);
+    syncRichEditors();
     return item;
   }
   function announceRows(group, message) {
@@ -770,7 +1065,7 @@ const CLIENT_SCRIPT = String.raw`
     const group = button.closest("[data-rows]");
     if (button.hasAttribute("data-add-row")) {
       const item = addRow(group, newRowId(group));
-      const first = item.querySelector("input, textarea, select");
+      const first = item.querySelector("input, textarea, select, .ql-editor");
       if (first) first.focus();
       announceRows(group, "Row " + rowItems(group).length + " added.");
     } else {
@@ -779,6 +1074,7 @@ const CLIENT_SCRIPT = String.raw`
       const index = items.indexOf(item);
       if (button.hasAttribute("data-row-remove")) {
         for (const upload of item.querySelectorAll("[data-upload]")) abortUploads(upload);
+        for (const wrap of item.querySelectorAll("[data-rich-text]")) richEditors.delete(wrap.dataset.richText);
         const next = items[index + 1] || items[index - 1];
         item.remove();
         renumberRows(group);
@@ -952,10 +1248,28 @@ const CLIENT_SCRIPT = String.raw`
       fail(error.message);
     }
   }
+  // Why a zone cannot take files right now, or "" when it can. Disabled covers the closed fieldset, hidden cards, and full zones.
+  function uploadBlocked(field) {
+    const input = field.querySelector(".upload-input");
+    if (!input || field.closest("[data-question]")?.hidden) return "This question is not available.";
+    if (uploadIds(field).length + field.querySelectorAll('[data-upload-state="uploading"]').length >= Number(field.dataset.maxFiles)) {
+      const maximum = Number(field.dataset.maxFiles);
+      return "You can attach up to " + maximum + (maximum === 1 ? " image." : " images.");
+    }
+    if (input.matches(":disabled")) return "Uploads are not available right now.";
+    return "";
+  }
   function handleFiles(input) {
     const field = input.closest("[data-upload]");
     const files = Array.from(input.files || []);
     input.value = "";
+    acceptFiles(field, files);
+  }
+  // Browse and drop share one path: type, size, and count checks, then the existing capability upload.
+  function acceptFiles(field, files) {
+    if (!files.length) return;
+    const blocked = uploadBlocked(field);
+    if (blocked) { uploadMessage(field, blocked); return; }
     const allowed = field.dataset.formats.split(",").map(function (format) { return FORMAT_TYPES[format]; });
     const maximum = Number(field.dataset.maxFiles);
     const maxBytes = Number(field.dataset.maxBytes);
@@ -968,6 +1282,50 @@ const CLIENT_SCRIPT = String.raw`
       startUpload(field, file);
     }
     uploadMessage(field, messages.join(" "));
+  }
+  function draggingFiles(event) {
+    return Boolean(event.dataTransfer && Array.from(event.dataTransfer.types || []).includes("Files"));
+  }
+  function dropzoneFor(event) {
+    const zone = event.target instanceof Element ? event.target.closest("[data-dropzone]") : null;
+    return zone && form.contains(zone) ? zone : null;
+  }
+  function setDragState(zone, state) {
+    for (const other of form.querySelectorAll("[data-drag-over]")) if (other !== zone) delete other.dataset.dragOver;
+    if (zone && state) zone.dataset.dragOver = state; else if (zone) delete zone.dataset.dragOver;
+  }
+  // Delegated on the form so dropzones inside rows added later work without their own listeners.
+  for (const type of ["dragenter", "dragover"]) {
+    form.addEventListener(type, function (event) {
+      if (!draggingFiles(event)) return;
+      const zone = dropzoneFor(event);
+      if (!zone) return;
+      event.preventDefault();
+      const accepting = !uploadBlocked(zone.closest("[data-upload]"));
+      event.dataTransfer.dropEffect = accepting ? "copy" : "none";
+      setDragState(zone, accepting ? "true" : "reject");
+    });
+  }
+  form.addEventListener("dragleave", function (event) {
+    const zone = dropzoneFor(event);
+    if (zone && !(event.relatedTarget instanceof Node && zone.contains(event.relatedTarget))) setDragState(zone, "");
+  });
+  form.addEventListener("drop", function (event) {
+    if (!draggingFiles(event)) return;
+    const zone = dropzoneFor(event);
+    if (!zone) return;
+    event.preventDefault();
+    setDragState(zone, "");
+    acceptFiles(zone.closest("[data-upload]"), Array.from(event.dataTransfer.files || []));
+  });
+  // A file dropped anywhere else must never navigate away from the draft.
+  for (const type of ["dragover", "drop"]) {
+    window.addEventListener(type, function (event) {
+      if (event.defaultPrevented || !draggingFiles(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "none";
+      if (type === "drop") setDragState(null, "");
+    });
   }
   const authenticationType = definition.authentication_type || "anonymous";
   const identityDialog = document.getElementById("identity-dialog");
@@ -1129,12 +1487,15 @@ const CLIENT_SCRIPT = String.raw`
       }
     });
   }
+  // Editors report through text-change; their contenteditable and link-panel events are not answers.
+  function richInternal(target) { return Boolean(target.closest("[data-rich-text]")) && !target.matches("textarea[name]"); }
   form.addEventListener("input", function (event) {
-    if (event.target.matches(".upload-input")) return;
+    if (event.target.matches(".upload-input") || richInternal(event.target)) return;
     updateVisibility(); clearErrors(); validateSelections(); updateProgress(); scheduleSave();
   });
   form.addEventListener("change", function (event) {
     if (event.target.matches(".upload-input")) { handleFiles(event.target); return; }
+    if (richInternal(event.target)) return;
     updateVisibility(); clearErrors(); validateSelections(); updateProgress(); scheduleSave();
   });
   form.addEventListener("submit", async function (event) {
@@ -1143,7 +1504,7 @@ const CLIENT_SCRIPT = String.raw`
     const selectionsValid = validateSelections();
     const nativeValid = form.reportValidity();
     if (!selectionsValid || !nativeValid) {
-      const firstInvalid = form.querySelector(":invalid") || document.querySelector('[data-ranking-required="true"][data-ranking-answered="false"] button:not(:disabled)');
+      const firstInvalid = form.querySelector(':invalid, .ql-editor[aria-invalid="true"]') || document.querySelector('[data-ranking-required="true"][data-ranking-answered="false"] button:not(:disabled)');
       if (firstInvalid) firstInvalid.focus();
       return;
     }
@@ -1238,6 +1599,7 @@ const CLIENT_SCRIPT = String.raw`
   window.addEventListener("scroll", scheduleOutlineUpdate, { passive: true });
   window.addEventListener("resize", scheduleOutlineUpdate);
   updateActiveOutline();
+  for (const wrap of form.querySelectorAll("[data-rich-text]")) if (!wrap.closest("template")) initRichEditor(wrap);
   for (const group of form.querySelectorAll('[data-rows][data-required="true"]')) {
     const minimum = Number(group.dataset.minRows || 0);
     while (rowItems(group).length < minimum) addRow(group, newRowId(group));
@@ -1249,6 +1611,7 @@ const CLIENT_SCRIPT = String.raw`
     questionnaireFields.disabled = false;
     for (const group of form.querySelectorAll("[data-rows]")) renumberRows(group);
     for (const field of form.querySelectorAll("[data-upload]")) setUploadIds(field, uploadIds(field));
+    syncRichEditors();
     updateProgress();
   }
 })();
@@ -1310,7 +1673,8 @@ export function renderQuestionnaire(questionnaire, nonce) {
   const accent = /^#[0-9a-f]{6}$/i.test(questionnaire.settings.accent_color || "")
     ? questionnaire.settings.accent_color : "#cba6f7";
   const initialVisibleCount = initialVisibleQuestionCount(questionnaire.questions);
-  const hasUploads = hasQuestionType(questionnaire.questions, "file_upload");
+  const hasUploads = hasQuestion(questionnaire.questions, (question) => question.type === "file_upload");
+  const hasRichText = hasQuestion(questionnaire.questions, isRichText);
   const mainQuestionLabel = `main ${questionnaire.questions.length === 1 ? "question" : "questions"}`;
   const nav = questionnaire.questions.map((question, index) => `
     <a href="#question-${escapeHtml(question.id)}" data-question-link="${escapeHtml(question.id)}"${index === 0 ? ' aria-current="step"' : ""}>
@@ -1354,6 +1718,14 @@ export function renderQuestionnaire(questionnaire, nonce) {
             ${closed ? "" : `<div class="outline-footer"><button type="button" class="next-unanswered" id="next-unanswered" disabled><span data-next-label>Next unanswered</span><span aria-hidden="true">↓</span></button></div>`}
           </div>
         </details>
+        <details class="privacy-details" id="privacy-storage">
+          <summary>Privacy &amp; storage</summary>
+          <div class="privacy-content">
+            ${closed ? "" : `<p>${SUBMIT_COPY[mode]}</p>`}
+            <p>${PRIVACY_COPY[mode]}</p>
+            ${hasUploads ? `<p class="upload-retention">${UPLOAD_RETENTION_COPY}</p>` : ""}
+          </div>
+        </details>
         <p class="outline-note">${closed ? "Read-only questionnaire" : "Move freely between questions.<br>Your answers stay in this document."}</p>
       </nav>
       <div class="form-column">
@@ -1369,10 +1741,9 @@ export function renderQuestionnaire(questionnaire, nonce) {
         <form id="questionnaire-form" method="post" novalidate>
           <fieldset${closed ? " disabled" : ' id="questionnaire-fields" disabled'}>
             ${questionnaire.questions.map((question, index) => renderQuestion(question, index)).join("")}
-            ${closed ? "" : `<div class="submit-panel"><div class="submit-kicker">Ready to send?</div><p>${SUBMIT_COPY[mode]}</p>${hasUploads ? `<p class="upload-retention">${UPLOAD_RETENTION_COPY}</p>` : ""}<button class="submit-button" id="submit-response" type="submit">${escapeHtml(questionnaire.settings.submit_label)}<span aria-hidden="true">↗</span></button></div>`}
+            ${closed ? "" : `<div class="submit-panel"><div class="submit-kicker">Ready to send?</div><button class="submit-button" id="submit-response" type="submit">${escapeHtml(questionnaire.settings.submit_label)}<span aria-hidden="true">↗</span></button></div>`}
           </fieldset>
         </form>
-        <p class="privacy-note">${PRIVACY_COPY[mode]}</p>
       </div>
     </div>
     <section id="completion-screen" class="completion" tabindex="-1" hidden aria-labelledby="completion-title">
@@ -1384,6 +1755,7 @@ export function renderQuestionnaire(questionnaire, nonce) {
   </main>
   ${closed ? "" : renderIdentityDialog(questionnaire, mode)}
   <script type="application/json" id="questionnaire-data">${safeJson(questionnaire)}</script>
+  ${hasRichText && !closed ? `<script nonce="${nonce}" src="${QUILL_ASSET_PATH}"></script>` : ""}
   <script nonce="${nonce}">${CLIENT_SCRIPT}</script>
 </body>
 </html>`;
