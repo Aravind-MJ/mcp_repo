@@ -1,7 +1,7 @@
 ---
 name: aravind-questionnaire-collector
 description: Use when collecting answers through shareable forms.
-version: 1.4.0
+version: 1.5.0
 author: Aravind M J, Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -51,6 +51,7 @@ Omit unchanged fields during an update. Use `get_questionnaire_signed_url` witho
 - `number`, `date`, `time`, `datetime`
 - `single_choice`, `multiple_choice`, `dropdown`, `yes_no`, `consent`
 - `rating`, `scale`, `ranking`, `matrix`
+- `file_upload`, `repeatable_rows`
 
 Choice-like questions require options with stable `value` and human-readable `label`. Matrix questions also require rows in the same shape. Do not repurpose option values within a revision.
 
@@ -89,6 +90,26 @@ Useful validation fields:
 - Rating settings: `max` (3–10), `icon` (`star`, `heart`, `number`)
 - Scale settings: `min`, `max`, `min_label`, `max_label`
 
+### Image uploads
+
+Use `file_upload` when the respondent must send a photo or screenshot, such as a receipt or a damaged item. It accepts JPEG, PNG, and WebP only. Settings: `formats` (subset of `jpeg`, `png`, `webp`; default all three), `min_files` (default 0), `max_files` (default 1, at most 10), and `max_bytes` (default 5242880, at most 10485760). Required means at least one image. The answer is an array of attachment IDs: `"receipt": ["<24-character ID>"]`.
+
+Only the respondent's browser can upload, through the signed answer link. You cannot upload on a respondent's behalf, and `submit_questionnaire_response` cannot reference an uploaded image because each image belongs to the browser draft that uploaded it. If the user wants to answer through MCP, make the `file_upload` question optional or send them the link.
+
+To read images back, call `get_questionnaire_response`. Its `attachments` array lists each image with `question_id`, `row_id`, `field_id`, `filename`, `content_type`, `width`, `height`, `bytes`, and a `download_url` that expires after one hour (`expires_at`). Fetch the URL to view the image. Do not share or log it, because anyone with it can download the image until it expires. Call the tool again for a fresh URL.
+
+### Repeatable rows
+
+Use `repeatable_rows` when the respondent lists a variable number of similar items, such as rooms, line items, or people. Give it `fields` (1 to 20, IDs unique within the group) and optional `settings`: `min_rows` (default 0), `max_rows` (default 10, at most 50), and `add_label` (default "Add row"). A field can be any ordinary type or `file_upload`. Do not nest `repeatable_rows`, and do not put `show_when` or `children` on fields or on the group.
+
+The answer is an ordered array of rows:
+
+```json
+{ "rooms": [{ "row_id": "r1", "values": { "name": "Kitchen", "size": 12 } }] }
+```
+
+`row_id` is 1 to 40 characters from `A-Z a-z 0-9 _ -` and must be unique within the answer. Keep it stable when rows are reordered. A row has only `row_id` and `values`, and `values` uses only the group's field IDs. A required group needs at least `max(1, min_rows)` rows; an optional group takes 0 rows or at least `min_rows`. Errors name the location, for example `rooms[2].name: an answer is required`.
+
 ## Response semantics
 
 Browser drafts are technical records with random IDs and no respondent identity; name and email are attached only at final submission. Set `authentication_type` when creating a questionnaire: `anonymous` (default, no identity accepted), `self_report` (name and email required, not checked), or `email_verified` (name self-reported, email confirmed by a one-time code). Each revision keeps its own mode, and `update_questionnaire` keeps the previous mode unless you pass one. Draft edit tokens are never exposed through management tools, are isolated to the current browser tab, and are stored only as hashes in SQLite. Response versions reject stale-tab overwrites. Drafts may contain incomplete input because autosave runs while a person types; `status="submitted"` is the reliable filter for finalized answers. Legacy submissions created before identity tracking return `respondent: null` with `identity_status: "legacy_missing"`.
@@ -101,3 +122,4 @@ Browser drafts are technical records with random IDs and no respondent identity;
 - Anyone holding the shared MCP bearer token can manage questionnaires and read responses.
 - A signed answer URL stops working at expiry, but already stored responses remain until deleted.
 - Closing prevents new saves; deleting permanently removes all revisions and responses.
+- Deleting a response or questionnaire also deletes its uploaded images. Images in submitted responses are otherwise kept.

@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
+import sharp from "sharp";
 import { createApp } from "../src/app.js";
 
 let root;
@@ -12,6 +13,7 @@ let baseUrl;
 let store;
 
 const trustedHeaders = { "x-questionnaire-basic-auth": "1" };
+const publicBaseUrl = "https://mcp.example.test";
 
 beforeEach(async () => {
   root = await mkdtemp(path.join(os.tmpdir(), "questionnaire-admin-test-"));
@@ -23,7 +25,7 @@ beforeEach(async () => {
     port: 0,
     dataDir: path.join(root, "data"),
     secretFile,
-    publicBaseUrl: "https://mcp.example.test",
+    publicBaseUrl,
     maxHtmlBytes: 1024,
     maxListItems: 200,
     maxQuestionnaires: 500,
@@ -171,4 +173,113 @@ test("renders nested response answers with their hierarchy and condition", async
   assert.match(html, /<div class="answer-children" role="group" aria-label="Follow-up answers"><section class="answer depth-2"><h3>Change detail<\/h3>/);
   assert.match(html, /Follow-up when parent answer is: Change/);
   assert.match(html, /Use the attached workflow/);
+});
+
+function subresourceUrl(signedUrl, suffix, extra = {}) {
+  const source = new URL(signedUrl.replace(publicBaseUrl, baseUrl));
+  const target = new URL(`${source.pathname}${suffix}`, baseUrl);
+  target.search = source.search;
+  for (const [key, value] of Object.entries(extra)) target.searchParams.set(key, value);
+  return target.toString();
+}
+
+async function json(response) {
+  return { status: response.status, body: await response.json() };
+}
+
+async function browserDraft(questionnaire) {
+  const signed = await store.createSignedUrl(questionnaire.questionnaire_id, undefined, questionnaire.revision);
+  const created = await json(await fetch(subresourceUrl(signed.url, "/responses"), { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }));
+  assert.equal(created.status, 201);
+  const { response_id: responseId, edit_token: editToken } = created.body;
+  const headers = { "Content-Type": "application/json", "X-Questionnaire-Edit-Token": editToken };
+  return {
+    responseId,
+    editToken,
+    url: (suffix = "", extra) => subresourceUrl(signed.url, `/responses/${responseId}${suffix}`, extra),
+    submit: async (answers) => json(await fetch(subresourceUrl(signed.url, `/responses/${responseId}/submit`), { method: "POST", headers, body: JSON.stringify({ answers }) })),
+  };
+}
+
+async function upload(draft, target, bytes, { contentType, filename }) {
+  const grant = await json(await fetch(draft.url("/attachments/capability"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Questionnaire-Edit-Token": draft.editToken },
+    body: JSON.stringify(target),
+  }));
+  assert.equal(grant.status, 200, JSON.stringify(grant.body));
+  const query = { ...target, filename, upload_expires: String(grant.body.upload_expires), upload_signature: grant.body.upload_signature };
+  const result = await json(await fetch(draft.url("/attachments", query), {
+    method: "POST",
+    headers: { "Content-Type": contentType, "X-Questionnaire-Edit-Token": draft.editToken },
+    body: bytes,
+  }));
+  assert.equal(result.status, 201, JSON.stringify(result.body));
+  return result.body;
+}
+
+test("renders uploaded images and repeatable rows, and serves attachments only behind the trusted header", async () => {
+  const questionnaire = store.create({
+    title: "Inventory",
+    questions: [
+      { id: "receipt", type: "file_upload", title: "Receipt photo", required: true },
+      {
+        id: "rooms",
+        type: "repeatable_rows",
+        title: "Rooms",
+        required: true,
+        fields: [
+          { id: "name", type: "short_text", title: "Room <name>", required: true },
+          { id: "kind", type: "single_choice", title: "Kind", options: [{ value: "bed", label: "Bedroom" }, { value: "bath", label: "Bathroom" }] },
+          { id: "photo", type: "file_upload", title: "Photo", settings: { formats: ["png"], max_files: 2 } },
+        ],
+      },
+    ],
+  });
+  const id = questionnaire.questionnaire_id;
+  const draft = await browserDraft(questionnaire);
+  const jpeg = await sharp({ create: { width: 64, height: 48, channels: 3, background: { r: 200, g: 40, b: 90 } } }).jpeg().toBuffer();
+  const png = await sharp({ create: { width: 30, height: 20, channels: 3, background: "white" } }).png().toBuffer();
+  const receipt = await upload(draft, { question_id: "receipt" }, jpeg, { contentType: "image/jpeg", filename: "receipt <1>.jpg" });
+  const photo = await upload(draft, { question_id: "rooms", row_id: "r2", field_id: "photo" }, png, { contentType: "image/png", filename: "den.png" });
+  const submitted = await draft.submit({
+    receipt: [receipt.attachment_id],
+    rooms: [
+      { row_id: "r1", values: { name: "<b>Kitchen</b>", kind: "bath" } },
+      { row_id: "r2", values: { name: "Den", kind: "bed", photo: [photo.attachment_id] } },
+    ],
+  });
+  assert.equal(submitted.status, 200, JSON.stringify(submitted.body));
+  const other = await browserDraft(questionnaire);
+
+  const detail = await fetch(`${baseUrl}/questionnaires/${id}/responses/${draft.responseId}`, { headers: trustedHeaders });
+  assert.equal(detail.status, 200);
+  const html = await detail.text();
+  const receiptUrl = `/questionnaires/${id}/responses/${draft.responseId}/attachments/${receipt.attachment_id}`;
+  const photoUrl = `/questionnaires/${id}/responses/${draft.responseId}/attachments/${photo.attachment_id}`;
+  assert.match(html, new RegExp(`<a href="${receiptUrl}"[^>]*><img src="${receiptUrl}"`));
+  assert.match(html, new RegExp(`<img src="${photoUrl}"`));
+  assert.match(html, /receipt &lt;1&gt;\.jpg/);
+  assert.match(html, /64 × 48 px/);
+  assert.match(html, /30 × 20 px/);
+  const size = (bytes) => bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
+  assert.match(html, new RegExp(`64 × 48 px · ${size(receipt.bytes)}`));
+  assert.match(html, new RegExp(`30 × 20 px · ${size(photo.bytes)}`));
+  assert.match(html, /Row 1[\s\S]*&lt;b&gt;Kitchen&lt;\/b&gt;[\s\S]*Bathroom[\s\S]*Row 2[\s\S]*Den[\s\S]*Bedroom[\s\S]*den\.png/);
+  assert.match(html, /Room &lt;name&gt;/);
+  assert.doesNotMatch(html, /<b>Kitchen/);
+  assert.doesNotMatch(html, /<name>/);
+
+  const image = await fetch(`${baseUrl}${receiptUrl}`, { headers: trustedHeaders });
+  assert.equal(image.status, 200);
+  assert.equal(image.headers.get("content-type"), "image/jpeg");
+  assert.equal(image.headers.get("x-content-type-options"), "nosniff");
+  assert.match(image.headers.get("content-security-policy"), /sandbox/);
+  assert.equal(image.headers.get("cache-control"), "private, no-store");
+  assert.equal((await sharp(Buffer.from(await image.arrayBuffer())).metadata()).width, 64);
+
+  assert.equal((await fetch(`${baseUrl}${receiptUrl}`)).status, 404);
+  assert.equal((await fetch(`${baseUrl}/questionnaires/${id}/responses/${other.responseId}/attachments/${receipt.attachment_id}`, { headers: trustedHeaders })).status, 404);
+  assert.equal((await fetch(`${baseUrl}/questionnaires/${id}/responses/${draft.responseId}/attachments/${"A".repeat(24)}`, { headers: trustedHeaders })).status, 404);
+  assert.equal((await fetch(`${baseUrl}/questionnaires/${id}/responses/${draft.responseId}/attachments/not-an-id`, { headers: trustedHeaders })).status, 404);
 });

@@ -23,6 +23,10 @@ A Node.js personal MCP service hosting multiple MCP modules under one domain. It
 | `POST /questionnaire/<id>/r/<revision>/responses/<response-id>/verification` | Signed URL + edit token | Email a one-time code (`email_verified` mode only) |
 | `POST /questionnaire/<id>/r/<revision>/responses/<response-id>/verification/confirm` | Signed URL + edit token | Check the code and return a single-use proof |
 | `POST /questionnaire/<id>/r/<revision>/responses/<response-id>/submit` | Signed URL + edit token | Validate, apply the identity mode, and finalize one response |
+| `POST /questionnaire/<id>/r/<revision>/responses/<response-id>/attachments/capability` | Signed URL + edit token | Grant a 5-minute upload capability bound to the response, revision, question, row, and field |
+| `POST /questionnaire/<id>/r/<revision>/responses/<response-id>/attachments?question_id=...&filename=...&upload_expires=...&upload_signature=...` | Signed URL + edit token + upload capability | Stream one raw JPEG, PNG, or WebP image into a draft (`row_id` and `field_id` for row fields) |
+| `GET /questionnaire/<id>/r/<revision>/responses/<response-id>/attachments/<attachment-id>` | Signed URL + edit token | Preview an image the draft owns |
+| `GET /questionnaire/<id>/attachments/<attachment-id>?expires=...&signature=...` | Attachment-scoped signed URL | Download a response image; `get_questionnaire_response` mints the one-hour URL |
 | `GET /questionnaire` | Public | Non-indexed module landing page |
 | `GET /questionnaire/README.md` | Public | Secret-free installation and schema guide |
 | `GET /questionnaire/SKILL.md` | Public | Companion agent skill |
@@ -33,6 +37,7 @@ A Node.js personal MCP service hosting multiple MCP modules under one domain. It
 | `GET /decisions/logs` | Caddy Basic Auth | Private Decision call log with arguments, results, failures, and costs |
 | `GET /questionnaires` | Caddy Basic Auth | Private questionnaire index with links, status, and response counts |
 | `GET /questionnaires/<id>/responses[/<response-id>]` | Caddy Basic Auth | Inspect collected response metadata and answers |
+| `GET /questionnaires/<id>/responses/<response-id>/attachments/<attachment-id>` | Caddy Basic Auth | View one image that belongs to that response |
 | `POST /questionnaires/<id>/{sign,status,delete}` | Caddy Basic Auth + action-scoped CSRF token | Mint links, open/close, or permanently delete from the index |
 | `GET /logo.svg` | Public | Full MCP brand mark |
 | `GET /favicon.svg` | Public | Browser/favicon brand mark |
@@ -92,10 +97,14 @@ The proxy must preserve the query string, Authorization, Content-Type, Range, an
 - `request_questionnaire_email_verification` / `verify_questionnaire_email` — the one-time-code steps for `email_verified` questionnaires. The bearer token does not bypass them.
 - `set_questionnaire_status` — opens or closes response collection.
 - `delete_questionnaire` — removes every revision and response.
-- `list_questionnaire_responses` — lists bounded response metadata; `get_questionnaire_response` retrieves one answer body by ID.
+- `list_questionnaire_responses` — lists bounded response metadata; `get_questionnaire_response` retrieves one answer body by ID, plus metadata for each uploaded image with a `download_url` that expires after one hour.
 - `delete_questionnaire_response` — permanently removes one response.
 
-Supported types: short/long text, email, URL, phone, number, date, time, date-time, single/multiple choice, dropdown, yes/no, consent, rating, scale, ranking, and matrix. The answering UI is responsive, keyboard accessible, progress-aware, dark-mode aware, and autosaves incomplete identity-free drafts before strict final validation. Each revision has an `authentication_type` of `anonymous` (default), `self_report`, or `email_verified`; identity is collected in a dialog only after the answers validate. See `public/questionnaire-README.md` for the rules and `docs/QUESTIONNAIRE_EMAIL.md` for SMTP setup.
+Supported types: short/long text, email, URL, phone, number, date, time, date-time, single/multiple choice, dropdown, yes/no, consent, rating, scale, ranking, matrix, `file_upload`, and `repeatable_rows`. A `file_upload` answer is an array of attachment IDs for JPEG, PNG, or WebP images. Respondents upload them in the browser on an edit-token draft, so MCP submissions cannot reference uploads. A `repeatable_rows` answer is an ordered array of `{ "row_id", "values" }` rows whose fields use any ordinary type or `file_upload`. The private index renders images as thumbnails and rows as numbered lists. The answering UI is responsive, keyboard accessible, progress-aware, dark-mode aware, and autosaves incomplete identity-free drafts before strict final validation. Each revision has an `authentication_type` of `anonymous` (default), `self_report`, or `email_verified`; identity is collected in a dialog only after the answers validate. See `public/questionnaire-README.md` for the rules and `docs/QUESTIONNAIRE_EMAIL.md` for SMTP setup.
+
+### Reverse-proxy requirements for questionnaire uploads
+
+The public questionnaire branch must pass `POST /questionnaire/<id>[/r/<revision>]/responses/<response-id>/attachments` to Node as a streaming body of up to 10 MiB, with the query string, `Content-Type`, and `X-Questionnaire-Edit-Token` intact. Set the proxy's request timeout above Node's 2-minute upload timeout. Do not cache any questionnaire attachment response. The admin image route under `/questionnaires` stays behind Basic Auth like the rest of the index. No proxy configuration is stored or changed by this repository.
 
 ## Decision tool
 
@@ -147,6 +156,11 @@ Reuse the existing Caddy private artifacts branch. Keep `/artifacts/decisions/lo
 - Storage is bounded by default to 100 immutable revisions and 10,000 response rows per questionnaire, plus 256 KiB of serialized answers per response. Operators may adjust these with `QUESTIONNAIRE_MAX_REVISIONS`, `QUESTIONNAIRE_MAX_RESPONSES`, and `QUESTIONNAIRE_MAX_ANSWER_BYTES`.
 - Draft edit tokens are returned only to the answering browser, isolated to the current tab through session storage, and persisted server-side only as SHA-256 hashes. Management tools never return them. Response versions prevent a stale duplicated tab from silently overwriting newer answers.
 - All questionnaire pages and response APIs require an unexpired signed URL. Response resume/autosave/submit also requires the draft edit token. Cross-site unsafe requests are rejected.
+- Uploads need the signed URL, the draft edit token, and a 5-minute HMAC capability bound to the response, revision, question, row, and field. Each attachment belongs to one response. The management bearer token never bypasses that ownership, so MCP submissions cannot reference uploaded images.
+- Node decodes every image and re-encodes it with all metadata removed (EXIF, GPS, ICC). It applies EXIF orientation and keeps only the first frame of an animated image. The declared Content-Type must match the decoded format; SVG is never accepted. Images may be at most 10,000 px per side and 40,000,000 px in total.
+- Upload limits: 2 concurrent uploads per response, 8 per questionnaire, 4 per source IP, and 16 in total; 100 attachments or 100 MiB per response and 5,000 attachments or 2 GiB per questionnaire. A SQLite `BEGIN IMMEDIATE` transaction reserves the slot, and an abort or failure releases it and deletes the partial file. Uploads time out after 2 minutes.
+- Images live under `data/questionnaire/attachments/<questionnaire-id>/` with modes `0700` and `0600`, and no static file server exposes them. Every image response sends `nosniff`, a sandbox CSP, `private, no-store`, and `noindex`.
+- An hourly in-process sweep enforces retention. Drafts that hold an upload expire after 7 days without an autosave or upload. Unreferenced or replaced images are deleted after 24 hours. Images in a submitted response stay until someone deletes the response or questionnaire, which also deletes the files. The sweep removes orphan files.
 
 Anyone who has an artifact URL can view it. Never publish secrets or private data in an artifact.
 

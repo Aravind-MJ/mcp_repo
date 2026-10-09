@@ -203,6 +203,7 @@ export async function createApp(config) {
   const decisionSettings = new DecisionSettings(config);
   await store.initialize();
   await questionnaireStore.initialize();
+  questionnaireStore.startLifecycle();
   await decisionsAuditLog.initialize();
   await readSharedSecret(config.secretFile);
 

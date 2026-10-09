@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import contentDisposition from "content-disposition";
 import express from "express";
 import { readFile } from "node:fs/promises";
 import { ServiceError } from "../errors.js";
@@ -81,6 +82,20 @@ function publicQuestionnaire(questionnaire) {
   };
 }
 
+export function sendAttachment(response, attachments, attachment, next) {
+  baseHeaders(response);
+  response.set("Content-Type", attachment.content_type);
+  response.set("Content-Disposition", contentDisposition(attachment.filename, { type: "inline" }));
+  response.set("Content-Security-Policy", "sandbox; default-src 'none'");
+  // The path is built from validated IDs; "allow" only stops a dot-directory in the data path from hiding it.
+  response.sendFile(attachments.filePath(attachment.questionnaire_id, attachment.id), { cacheControl: false, lastModified: false, etag: false, dotfiles: "allow" }, (error) => {
+    if (!error) return;
+    for (const header of ["Content-Type", "Content-Disposition"]) response.removeHeader(header);
+    if (error.status === 404) return next(new ServiceError(404, "Attachment not found"));
+    next(error);
+  });
+}
+
 export function mountQuestionnaireRoutes(app, store, config) {
   const answerJson = express.json({ limit: config.maxAnswerBytes + 16 * 1024, strict: true });
   const pages = ["/questionnaire/:questionnaireId", "/questionnaire/:questionnaireId/r/:revision"];
@@ -89,6 +104,10 @@ export function mountQuestionnaireRoutes(app, store, config) {
   const verifications = ["/questionnaire/:questionnaireId/responses/:responseId/verification", "/questionnaire/:questionnaireId/r/:revision/responses/:responseId/verification"];
   const confirmations = ["/questionnaire/:questionnaireId/responses/:responseId/verification/confirm", "/questionnaire/:questionnaireId/r/:revision/responses/:responseId/verification/confirm"];
   const submissions = ["/questionnaire/:questionnaireId/responses/:responseId/submit", "/questionnaire/:questionnaireId/r/:revision/responses/:responseId/submit"];
+  const uploadGrants = ["/questionnaire/:questionnaireId/responses/:responseId/attachments/capability", "/questionnaire/:questionnaireId/r/:revision/responses/:responseId/attachments/capability"];
+  const uploads = ["/questionnaire/:questionnaireId/responses/:responseId/attachments", "/questionnaire/:questionnaireId/r/:revision/responses/:responseId/attachments"];
+  const previews = ["/questionnaire/:questionnaireId/responses/:responseId/attachments/:attachmentId", "/questionnaire/:questionnaireId/r/:revision/responses/:responseId/attachments/:attachmentId"];
+  const attachments = store.attachments;
 
   app.get(["/questionnaire", "/questionnaire/"], (request, response) => {
     baseHeaders(response);
@@ -125,7 +144,7 @@ export function mountQuestionnaireRoutes(app, store, config) {
       }
       const nonce = randomBytes(18).toString("base64");
       baseHeaders(response);
-      response.set("Content-Security-Policy", `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`);
+      response.set("Content-Security-Policy", `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; connect-src 'self'; img-src blob:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`);
       response.type("html").send(renderQuestionnaire(definition, nonce));
     } catch (error) { next(error); }
   });
@@ -190,6 +209,53 @@ export function mountQuestionnaireRoutes(app, store, config) {
       );
       baseHeaders(response);
       response.json(result);
+    } catch (error) { next(error); }
+  });
+
+  // Upload capabilities are short lived and bound to the response, revision, question, row, and field.
+  app.post(uploadGrants, answerJson, async (request, response, next) => {
+    try {
+      requireSameOrigin(request, config);
+      requireJson(request);
+      const questionnaire = await authorizedQuestionnaire(request, store, config, { responseRequest: true });
+      const row = store.responseRow(questionnaire.questionnaire_id, questionnaire.revision, request.params.responseId, request.get("x-questionnaire-edit-token"));
+      const result = await attachments.grantCapability(questionnaire, row, request.body || {});
+      baseHeaders(response);
+      response.json(result);
+    } catch (error) { next(error); }
+  });
+
+  app.post(uploads, async (request, response, next) => {
+    try {
+      requireSameOrigin(request, config);
+      const questionnaire = await authorizedQuestionnaire(request, store, config, { responseRequest: true });
+      const row = store.responseRow(questionnaire.questionnaire_id, questionnaire.revision, request.params.responseId, request.get("x-questionnaire-edit-token"));
+      const result = await attachments.receive({ questionnaire, row, query: request.query, request, sourceIp: request.ip });
+      baseHeaders(response);
+      response.status(201).json(result);
+    } catch (error) {
+      // An unread body must not be drained into a kept-alive connection.
+      if (!request.complete) response.set("Connection", "close");
+      next(error);
+    }
+  });
+
+  app.get(previews, async (request, response, next) => {
+    try {
+      const questionnaire = await authorizedQuestionnaire(request, store, config, { responseRequest: true });
+      const row = store.responseRow(questionnaire.questionnaire_id, questionnaire.revision, request.params.responseId, request.get("x-questionnaire-edit-token"));
+      const attachment = attachments.stored(questionnaire.questionnaire_id, request.params.attachmentId);
+      if (!attachment || attachment.response_id !== row.id) throw new ServiceError(404, "Attachment not found");
+      sendAttachment(response, attachments, attachment, next);
+    } catch (error) { next(error); }
+  });
+
+  app.get("/questionnaire/:questionnaireId/attachments/:attachmentId", async (request, response, next) => {
+    try {
+      const questionnaireId = store.validateId(request.params.questionnaireId);
+      const attachment = await attachments.authorizedDownload(questionnaireId, request.params.attachmentId, request.query);
+      if (!attachment) throw new ServiceError(404, "Attachment not found");
+      sendAttachment(response, attachments, attachment, next);
     } catch (error) { next(error); }
   });
 

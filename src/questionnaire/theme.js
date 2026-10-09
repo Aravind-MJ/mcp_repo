@@ -257,6 +257,48 @@ input[type="checkbox"] + .option-indicator { border-radius: 4px; }
 .matrix label { position: relative; display: grid; place-items: center; min-width: 36px; min-height: 36px; cursor: pointer; }
 .matrix input { width: 20px; height: 20px; accent-color: var(--mauve); }
 
+/* Image uploads: native file picker, private previews, and per-file progress. */
+.upload-picker { display: grid; gap: 8px; }
+.upload-input { max-width: 100%; color: var(--subtext1); font-size: 13px; }
+.upload-input::file-selector-button { min-height: 44px; margin-right: 12px; padding: 0 16px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--mantle); color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
+.upload-input:hover:not(:disabled)::file-selector-button { border-color: var(--mauve); color: var(--mauve); }
+.upload-input:disabled::file-selector-button { border-color: var(--surface0); color: var(--subtext0); cursor: not-allowed; }
+.upload-picker .field-hint { margin: 0; }
+.upload-list { display: grid; gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; }
+.upload-list:empty { display: none; }
+.upload-item { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--control-border); border-radius: 7px; background: var(--mantle); }
+.upload-item[data-upload-state="error"] { border-color: var(--red); }
+.upload-thumb { width: 56px; height: 56px; border-radius: 5px; background: var(--surface0); object-fit: cover; }
+.upload-copy { display: grid; gap: 2px; min-width: 0; }
+.upload-copy strong { overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.upload-copy small { color: var(--subtext0); font-size: 12px; }
+.upload-item[data-upload-state="error"] small { color: var(--red); }
+.upload-copy progress { width: 100%; height: 6px; accent-color: var(--mauve); }
+.upload-action, .row-action, .add-row { min-height: 40px; padding: 0 12px; border: 1px solid var(--control-border); border-radius: 5px; background: var(--base); color: var(--text); font-size: 13px; }
+.upload-action:hover, .row-action:hover:not(:disabled), .add-row:hover:not(:disabled) { border-color: var(--mauve); color: var(--mauve); }
+.upload-retention { color: var(--subtext0); font-size: 13px; }
+
+/* Repeatable rows: numbered cards with reorder and remove controls. */
+.row-list { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.row-list:empty { display: none; }
+.row-item { padding: 14px 16px 16px; border: 1px solid var(--surface1); border-radius: 8px; background: var(--mantle); }
+.row-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.row-title { color: var(--mauve); font: 600 12px ui-monospace, monospace; letter-spacing: .06em; text-transform: uppercase; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.row-action { min-width: 40px; padding: 0 10px; }
+.row-action:disabled, .add-row:disabled { border-color: var(--surface0); color: var(--subtext0); background: var(--mantle); cursor: not-allowed; }
+.row-remove:not(:disabled) { color: var(--red); }
+.row-fields { display: grid; gap: 16px; }
+.row-field { display: grid; gap: 8px; }
+.row-field-label { display: grid; gap: 2px; }
+.row-field-title { font-size: 14px; font-weight: 600; }
+.row-field-description { color: var(--subtext0); font-size: 13px; }
+.row-field .field-error:empty { display: none; }
+.row-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 12px; }
+.row-footer .field-hint { margin: 0; }
+.add-row { font-weight: 600; }
+.add-row::before { content: "+ " / ""; color: var(--mauve); }
+
 /* Validation and terminal states stay legible without color alone. */
 .field-hint { color: var(--subtext0); font-size: 12px; }
 .field-error { margin: 8px 0 0; color: var(--red); font-size: 13px; }
@@ -334,6 +376,11 @@ input[type="checkbox"] + .option-indicator { border-radius: 4px; }
   .rank-actions { gap: 3px; }
   .rank-actions button { width: 32px; }
   .ranking li { grid-template-columns: 15px minmax(0, 1fr) auto; gap: 6px; padding: 8px; }
+  .row-item { padding: 12px; }
+  .row-head { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .upload-item { grid-template-columns: 44px minmax(0, 1fr); }
+  .upload-thumb { width: 44px; height: 44px; }
+  .upload-action { grid-column: 1 / -1; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }

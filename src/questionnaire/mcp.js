@@ -5,7 +5,14 @@ import {
   MAX_QUESTIONNAIRE_EXPIRY_SECONDS,
   MIN_QUESTIONNAIRE_EXPIRY_SECONDS,
 } from "../security.js";
-import { RESPONDENT_EMAIL_PATTERN } from "./store.js";
+import {
+  FILE_UPLOAD_DEFAULTS,
+  FILE_UPLOAD_HARD_LIMITS,
+  REPEATABLE_ROWS_DEFAULTS,
+  REPEATABLE_ROWS_HARD_LIMITS,
+  RESPONDENT_EMAIL_PATTERN,
+  UPLOAD_FORMATS,
+} from "./store.js";
 
 const questionnaireId = z.string().regex(/^[A-Za-z0-9]{24}$/).describe("The 24-character alphanumeric questionnaire ID");
 const responseId = z.string().regex(/^[A-Za-z0-9]{24}$/).describe("The 24-character alphanumeric response ID");
@@ -42,47 +49,82 @@ const selectionValidation = z.object({
   min_selections: z.number().int().min(0).max(100).optional(),
   max_selections: z.number().int().min(1).max(100).optional(),
 }).strict();
-const textQuestion = (type) => z.object({
-  ...baseQuestion,
-  type: z.literal(type),
-  placeholder: z.string().max(200).optional(),
-  validation: textValidation.optional(),
+const uploadSettings = z.object({
+  formats: z.array(z.enum(UPLOAD_FORMATS)).min(1).max(UPLOAD_FORMATS.length).optional().describe(`Accepted image formats; defaults to ${UPLOAD_FORMATS.join(", ")}. SVG and other formats are never accepted.`),
+  min_files: z.number().int().min(0).max(FILE_UPLOAD_HARD_LIMITS.max_files).optional().describe(`Defaults to ${FILE_UPLOAD_DEFAULTS.min_files}; required questions also need at least one file`),
+  max_files: z.number().int().min(1).max(FILE_UPLOAD_HARD_LIMITS.max_files).optional().describe(`Defaults to ${FILE_UPLOAD_DEFAULTS.max_files}`),
+  max_bytes: z.number().int().min(1024).max(FILE_UPLOAD_HARD_LIMITS.max_bytes).optional().describe(`Per-file upload limit in bytes; defaults to ${FILE_UPLOAD_DEFAULTS.max_bytes} (5 MiB)`),
 }).strict();
-const simpleQuestion = (type) => z.object({ ...baseQuestion, type: z.literal(type) }).strict();
-const optionQuestion = (type, maximum = 100) => z.object({
-  ...baseQuestion,
-  type: z.literal(type),
-  options: z.array(optionSchema).min(2).max(maximum),
-}).strict();
+// Every answerable type, built on either the top-level question base or the row-field base.
+function typedQuestions(base) {
+  const textQuestion = (type) => z.object({
+    ...base,
+    type: z.literal(type),
+    placeholder: z.string().max(200).optional(),
+    validation: textValidation.optional(),
+  }).strict();
+  const simpleQuestion = (type) => z.object({ ...base, type: z.literal(type) }).strict();
+  const optionQuestion = (type, maximum = 100) => z.object({
+    ...base,
+    type: z.literal(type),
+    options: z.array(optionSchema).min(2).max(maximum),
+  }).strict();
+  return [
+    textQuestion("short_text"), textQuestion("long_text"), textQuestion("email"), textQuestion("url"), textQuestion("phone"),
+    z.object({ ...base, type: z.literal("number"), validation: numberValidation.optional() }).strict(),
+    simpleQuestion("date"), simpleQuestion("time"), simpleQuestion("datetime"),
+    optionQuestion("single_choice"),
+    z.object({ ...base, type: z.literal("multiple_choice"), options: z.array(optionSchema).min(2).max(100), validation: selectionValidation.optional() }).strict(),
+    optionQuestion("dropdown"), simpleQuestion("yes_no"), simpleQuestion("consent"),
+    z.object({
+      ...base,
+      type: z.literal("rating"),
+      settings: z.object({ max: z.number().int().min(3).max(10).optional(), icon: z.enum(["star", "heart", "number"]).optional() }).strict().optional(),
+    }).strict(),
+    z.object({
+      ...base,
+      type: z.literal("scale"),
+      settings: z.object({
+        min: z.number().int().min(-10).max(100).optional(),
+        max: z.number().int().min(-9).max(100).optional(),
+        min_label: z.string().max(100).optional(),
+        max_label: z.string().max(100).optional(),
+      }).strict().optional(),
+    }).strict(),
+    optionQuestion("ranking", 30),
+    z.object({
+      ...base,
+      type: z.literal("matrix"),
+      options: z.array(optionSchema).min(2).max(12),
+      rows: z.array(optionSchema).min(1).max(30),
+    }).strict(),
+    z.object({
+      ...base,
+      type: z.literal("file_upload"),
+      settings: uploadSettings.optional(),
+    }).strict().describe("Private image upload answered in the browser only. The answer is an array of attachment IDs owned by that response."),
+  ];
+}
+const baseField = {
+  id: z.string().min(1).max(64).describe("Stable key inside each row's values object; unique within this group"),
+  title: z.string().min(1).max(300),
+  description: z.string().max(1000).optional(),
+  required: z.boolean().optional().default(false),
+};
+const rowFieldSchema = z.union(typedQuestions(baseField));
+const { children: _children, ...rowsBase } = baseQuestion;
 questionSchema = z.union([
-  textQuestion("short_text"), textQuestion("long_text"), textQuestion("email"), textQuestion("url"), textQuestion("phone"),
-  z.object({ ...baseQuestion, type: z.literal("number"), validation: numberValidation.optional() }).strict(),
-  simpleQuestion("date"), simpleQuestion("time"), simpleQuestion("datetime"),
-  optionQuestion("single_choice"),
-  z.object({ ...baseQuestion, type: z.literal("multiple_choice"), options: z.array(optionSchema).min(2).max(100), validation: selectionValidation.optional() }).strict(),
-  optionQuestion("dropdown"), simpleQuestion("yes_no"), simpleQuestion("consent"),
+  ...typedQuestions(baseQuestion),
   z.object({
-    ...baseQuestion,
-    type: z.literal("rating"),
-    settings: z.object({ max: z.number().int().min(3).max(10).optional(), icon: z.enum(["star", "heart", "number"]).optional() }).strict().optional(),
-  }).strict(),
-  z.object({
-    ...baseQuestion,
-    type: z.literal("scale"),
+    ...rowsBase,
+    type: z.literal("repeatable_rows"),
     settings: z.object({
-      min: z.number().int().min(-10).max(100).optional(),
-      max: z.number().int().min(-9).max(100).optional(),
-      min_label: z.string().max(100).optional(),
-      max_label: z.string().max(100).optional(),
+      min_rows: z.number().int().min(0).max(REPEATABLE_ROWS_HARD_LIMITS.max_rows).optional().describe(`Defaults to ${REPEATABLE_ROWS_DEFAULTS.min_rows}; a required group needs at least one row`),
+      max_rows: z.number().int().min(1).max(REPEATABLE_ROWS_HARD_LIMITS.max_rows).optional().describe(`Defaults to ${REPEATABLE_ROWS_DEFAULTS.max_rows}`),
+      add_label: z.string().max(60).optional(),
     }).strict().optional(),
-  }).strict(),
-  optionQuestion("ranking", 30),
-  z.object({
-    ...baseQuestion,
-    type: z.literal("matrix"),
-    options: z.array(optionSchema).min(2).max(12),
-    rows: z.array(optionSchema).min(1).max(30),
-  }).strict(),
+    fields: z.array(rowFieldSchema).min(1).max(REPEATABLE_ROWS_HARD_LIMITS.max_fields).describe("Typed fields repeated in every row. Row fields cannot be repeatable groups, conditional, or nested."),
+  }).strict().describe("Respondent-managed list of rows. The answer is an ordered array of { row_id, values } objects; row_id is a stable caller-chosen ID (letters, digits, dash, underscore; at most 40) unique within the answer."),
 ]);
 const settingsSchema = z.object({
   submit_label: z.string().max(60).optional(),
@@ -260,10 +302,13 @@ export function createQuestionnaireMcpServer(store, { sourceIp = "mcp-direct" } 
 
   server.registerTool("get_questionnaire_response", {
     title: "Get questionnaire response",
-    description: "Retrieve one response, its respondent attribution, and answers by questionnaire and response ID. Edit tokens are never returned.",
+    description: "Retrieve one response, its respondent attribution, and answers by questionnaire and response ID. Uploaded images referenced by the answers are listed under attachments with private download URLs that expire after one hour; call again for fresh URLs. Edit tokens are never returned.",
     inputSchema: { questionnaire_id: questionnaireId, response_id: responseId },
     annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false, readOnlyHint: true },
-  }, async ({ questionnaire_id, response_id }) => toolResult(store.getResponse(questionnaire_id, response_id)));
+  }, async ({ questionnaire_id, response_id }) => {
+    const response = store.getResponse(questionnaire_id, response_id);
+    return toolResult({ ...response, attachments: await store.attachments.withDownloadUrls(response.questionnaire_id, response.attachments) });
+  });
 
   server.registerTool("delete_questionnaire_response", {
     title: "Delete questionnaire response",

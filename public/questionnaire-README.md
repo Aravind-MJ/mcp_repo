@@ -86,7 +86,7 @@ Enter the credential provisioned by the service owner only at the hidden credent
 | `set_questionnaire_status` | Open or close response collection without deleting data. |
 | `delete_questionnaire` | Permanently delete all revisions and responses. |
 | `list_questionnaire_responses` | List bounded response metadata, optionally by revision or status. |
-| `get_questionnaire_response` | Read one response, its respondent attribution, and answers by ID. |
+| `get_questionnaire_response` | Read one response, its respondent attribution, and answers by ID. Each uploaded image comes with a `download_url` that expires after one hour. |
 | `delete_questionnaire_response` | Permanently delete one response. |
 
 ## Supported answer types
@@ -95,6 +95,7 @@ Enter the credential provisioned by the service owner only at the hidden credent
 - Numeric and temporal: `number`, `date`, `time`, `datetime`
 - Choice: `single_choice`, `multiple_choice`, `dropdown`, `yes_no`, `consent`
 - Structured: `rating`, `scale`, `ranking`, `matrix`
+- Images and groups: `file_upload`, `repeatable_rows`
 
 Every question has a stable `id`, `type`, `title`, optional `description`, and optional `required`. Choice, ranking, and matrix questions use `{ "value", "label", "description?" }` option objects. Text/number/multiple-choice validation and rating/scale settings are supported.
 
@@ -125,6 +126,142 @@ Put follow-up fields in a parent's `children` array. A child may include `show_w
 ```
 
 Conditions are explicit; numbering and adjacent placement never imply a relationship. IDs are unique across the entire tree, nesting is limited to eight levels, and the 200-question limit includes every nested field. Response answer objects remain flat by stable ID. Inactive branches are omitted from autosaves and submissions, and required validation applies only while a child is active.
+
+## File uploads
+
+A `file_upload` question collects JPEG, PNG, or WebP images. Its optional `settings`:
+
+| Setting | Default | Allowed |
+|---|---|---|
+| `formats` | `["jpeg", "png", "webp"]` | Any non-empty subset of `jpeg`, `png`, `webp`. SVG is never accepted. |
+| `min_files` | `0` | `0` through `max_files` |
+| `max_files` | `1` | `1` through `10` |
+| `max_bytes` | `5242880` (5 MiB) | Up to `10485760` (10 MiB) per image |
+
+A required `file_upload` question needs at least one image.
+
+```json
+{
+  "id": "receipt",
+  "type": "file_upload",
+  "title": "Photo of the receipt",
+  "required": true,
+  "settings": { "formats": ["jpeg", "png"], "max_files": 3 }
+}
+```
+
+The answer is an array of attachment IDs:
+
+```json
+{ "receipt": ["Ab3dEf6hIj9kLm2nOp5qRs8t"] }
+```
+
+Only the answering browser can upload. It needs a draft and its edit token, and it works in every authentication mode. An attachment belongs to the response that uploaded it, and the management bearer token does not bypass that. An MCP submission therefore cannot reference an upload; use an optional `file_upload` question if some respondents will answer through MCP.
+
+The browser flow uses the signed questionnaire URL and the `X-Questionnaire-Edit-Token` header on every call:
+
+1. `POST .../responses/{response_id}/attachments/capability` with JSON `{ "question_id", "row_id"?, "field_id"? }`. The reply holds `upload_expires` and `upload_signature`, valid for 5 minutes and bound to that response, revision, question, row, and field.
+2. `POST .../responses/{response_id}/attachments?question_id=...&row_id=...&field_id=...&filename=...&upload_expires=...&upload_signature=...` with the raw image as the body. The reply holds `attachment_id`, `filename`, `content_type`, `width`, `height`, and `bytes`.
+3. `GET .../responses/{response_id}/attachments/{attachment_id}` previews an image the draft owns.
+4. Autosave or submit the answer with the returned IDs.
+
+The server decodes each image and re-encodes it. That strips EXIF, GPS, ICC, and all other metadata, applies the EXIF orientation, and keeps only the first frame of an animated image. The declared `Content-Type` must match the real bytes. Images may be at most 10,000 px per side and 40,000,000 px in total.
+
+### Upload limits
+
+| Limit | Value | Error |
+|---|---|---|
+| Concurrent uploads | 2 per response, 8 per questionnaire, 4 per source IP, 16 in total | `429` |
+| Stored images per response | 100 attachments or 100 MiB | `409` |
+| Stored images per questionnaire | 5,000 attachments or 2 GiB | `409` |
+| Image size or dimensions | `max_bytes`; 10,000 px per side; 40,000,000 px in total | `413` |
+| Format | Must be one of the question's `formats` and match the declared type | `415` |
+| Upload capability | 5 minutes | `403` |
+| Upload duration | 2 minutes | `408` |
+
+Each upload reserves its slot in one SQLite `BEGIN IMMEDIATE` transaction. An abort or failure releases the slot and deletes the partial file.
+
+### Retention
+
+| Image state | Kept until |
+|---|---|
+| Partial upload | Deleted when the upload fails |
+| In a draft | The draft expires after 7 days without an autosave or upload |
+| Unreferenced or replaced | Deleted after a 24-hour grace period |
+| In a submitted response | Someone deletes the response or the questionnaire |
+
+Deleting a response or questionnaire deletes its files. An hourly sweep inside the service applies these rules and removes orphan files. Images are stored privately under `<data>/questionnaire/attachments/<questionnaire-id>/` and are never served as static files.
+
+### Reading images back
+
+`get_questionnaire_response` returns an `attachments` array with one entry for each image the answers reference:
+
+```json
+{
+  "attachment_id": "Ab3dEf6hIj9kLm2nOp5qRs8t",
+  "question_id": "rooms",
+  "row_id": "r1",
+  "field_id": "photo",
+  "filename": "kitchen.png",
+  "content_type": "image/png",
+  "width": 1600,
+  "height": 1200,
+  "bytes": 482113,
+  "sha256": "<64 hex characters>",
+  "download_url": "https://mcp.aravindmj.in/questionnaire/{id}/attachments/{attachment_id}?expires=...&signature=...",
+  "expires_at": "2026-10-09T13:00:00.000Z"
+}
+```
+
+`row_id` and `field_id` are `null` for a top-level question. The download URL works for one hour without the bearer token, so treat it as a secret. Call `get_questionnaire_response` again for a fresh one. Downloads send `nosniff`, a sandbox CSP, `private, no-store`, and `noindex`. The private index shows the same images as thumbnails behind Basic Auth.
+
+## Repeatable rows
+
+A `repeatable_rows` question collects a list of rows with the same fields, such as rooms in a house or items in an order. Its optional `settings`:
+
+| Setting | Default | Allowed |
+|---|---|---|
+| `min_rows` | `0` | `0` through `max_rows` |
+| `max_rows` | `10` | Up to `50` |
+| `add_label` | `"Add row"` | Button text |
+
+`fields` holds 1 to 20 fields with IDs that are unique within the group. A field can use any ordinary type or `file_upload`. Fields cannot be `repeatable_rows`, cannot use `show_when` or `children`, and the group itself cannot have `children`.
+
+```json
+{
+  "id": "rooms",
+  "type": "repeatable_rows",
+  "title": "Rooms",
+  "required": true,
+  "settings": { "min_rows": 1, "max_rows": 5, "add_label": "Add a room" },
+  "fields": [
+    { "id": "name", "type": "short_text", "title": "Room name", "required": true },
+    { "id": "size", "type": "number", "title": "Size (m²)", "validation": { "min": 1 } },
+    { "id": "photo", "type": "file_upload", "title": "Photo", "settings": { "max_files": 3 } }
+  ]
+}
+```
+
+The answer is an ordered array of rows. Each `values` object uses the field IDs and each field's normal answer shape:
+
+```json
+{
+  "rooms": [
+    { "row_id": "r1", "values": { "name": "Kitchen", "size": 12, "photo": ["Ab3dEf6hIj9kLm2nOp5qRs8t"] } },
+    { "row_id": "r2", "values": { "name": "Den" } }
+  ]
+}
+```
+
+Rules:
+
+- `row_id` is 1 to 40 characters of `A-Z`, `a-z`, `0-9`, `_`, or `-`, unique within the answer. Keep it the same when rows move; uploads in a row are bound to its `row_id`.
+- Rows stay in the submitted order.
+- A row may contain only `row_id` and `values`. Unknown field IDs are rejected.
+- A required group needs at least `max(1, min_rows)` rows. An optional group accepts 0 rows or at least `min_rows`.
+- Autosave checks each field's format and validation in every row. Submission also enforces required fields and the row count.
+
+Error messages name the row and field. `rooms[2].name: an answer is required` points at a field in the second row, `rooms[1]: row_id must be unique` at a whole row, and `rooms: add at least 1 row` at the group.
 
 ## Example
 
