@@ -79,8 +79,8 @@ test("renders a secure questionnaire index and manages share links and status", 
   const html = await response.text();
   assert.match(html, /Private index/);
   assert.match(html, /Questionnaires/);
-  assert.match(html, /<tr class="total"><th scope="row">All revisions<\/th><td>0<\/td><td>1<\/td><\/tr>/);
-  assert.doesNotMatch(html, /Previous revisions/);
+  assert.match(html, new RegExp(`<a class="recent-link" href="/questionnaires/${questionnaire.questionnaire_id}/responses/${draft.response_id}">`));
+  assert.doesNotMatch(html, /Previous revisions|responses-table/);
   assert.match(html, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>alert\("x"\)<\/script>/);
   assert.match(html, new RegExp(`href="/questionnaires/${questionnaire.questionnaire_id}/responses"`));
@@ -300,47 +300,107 @@ function addResponses(id, revision, submitted, drafts) {
   }
 }
 
-test("dashboard cards total responses across all revisions and split current from previous", async () => {
-  const questions = (name) => [{ id: "q", type: "short_text", title: name }];
-  const mixed = store.create({ title: "Mixed", questions: questions("one") });
-  const id = mixed.questionnaire_id;
-  addResponses(id, 1, 2, 1);
-  store.update(id, { questions: questions("two") });
-  addResponses(id, 2, 1, 0);
-  store.update(id, { questions: questions("three") });
-  addResponses(id, 3, 1, 2);
-  const olderOnly = store.create({ title: "Older only", questions: questions("a") });
-  addResponses(olderOnly.questionnaire_id, 1, 3, 2);
-  store.update(olderOnly.questionnaire_id, { questions: questions("b") });
-  const empty = store.create({ title: "Empty", questions: questions("e") });
-  store.update(empty.questionnaire_id, { questions: questions("f") });
-  const single = store.create({ title: "Single", questions: questions("s") });
-  addResponses(single.questionnaire_id, 1, 1, 1);
+function setTimes(responseId, { submitted, updated }) {
+  store.db.prepare("UPDATE responses SET submitted_at = COALESCE(?, submitted_at), updated_at = COALESCE(?, updated_at) WHERE id = ?").run(submitted ?? null, updated ?? null, responseId);
+}
 
-  // Revision-scoped contract is unchanged.
-  assert.deepEqual(store.get(id).response_counts, { total: 3, drafts: 2, submitted: 1 });
-  assert.deepEqual(store.get(id, 1).response_counts, { total: 3, drafts: 1, submitted: 2 });
+function makeResponse(id, revision, kind, label, { respondent, times = {} } = {}) {
+  const created = store.createResponse(id, revision);
+  if (kind === "submitted") store.submitResponse(id, revision, created.response_id, created.edit_token, { q: label }, respondent);
+  else store.saveResponse(id, revision, created.response_id, created.edit_token, { q: label });
+  setTimes(created.response_id, times);
+  return created.response_id;
+}
+
+const questionsOf = (name) => [{ id: "q", type: "short_text", title: name }];
+const previewOf = (card) => card.match(/<ul class="recent-responses"[\s\S]*?<\/ul>/)?.[0] ?? "";
+const linksOf = (card) => [...card.matchAll(/<a class="recent-link" href="([^"]+)"/g)].map((match) => match[1]);
+
+test("card preview replaces the count table with at most five recent responses, submissions first", async () => {
+  const mixed = store.create({ title: "Mixed", questions: questionsOf("one") }).questionnaire_id;
+  const day = (n) => `2026-03-0${n}T10:00:00.000Z`;
+  const ids = {};
+  ids.s1 = makeResponse(mixed, 1, "submitted", "a", { times: { submitted: day(1) } });
+  store.update(mixed, { questions: questionsOf("two") });
+  ids.s2 = makeResponse(mixed, 2, "submitted", "b", { times: { submitted: day(5) } });
+  ids.s3 = makeResponse(mixed, 2, "submitted", "c", { times: { submitted: day(3) } });
+  store.update(mixed, { questions: questionsOf("three") });
+  ids.s4 = makeResponse(mixed, 3, "submitted", "d", { times: { submitted: day(4) } });
+  ids.s5 = makeResponse(mixed, 3, "submitted", "e", { times: { submitted: day(2) } });
+  ids.s6 = makeResponse(mixed, 3, "submitted", "f", { times: { submitted: day(6) } });
+  // Newer draft must not displace any submission.
+  ids.d1 = makeResponse(mixed, 3, "draft", "g", { times: { updated: "2026-04-01T00:00:00.000Z" } });
+  // Creation order differs from submission order: s1 was created first but submitted earliest.
 
   const html = await (await fetch(`${baseUrl}/questionnaires`, { headers: trustedHeaders })).text();
-  const card = cardFor(html, id);
-  assert.match(card, /<tr class="total"><th scope="row">All revisions<\/th><td>4<\/td><td>3<\/td><\/tr>/);
-  assert.match(card, /<tr class="sub"><th scope="row">Revision 3 \(current\)<\/th><td>1<\/td><td>2<\/td><\/tr>/);
-  assert.match(card, /<tr class="sub"><th scope="row">Previous revisions<\/th><td>3<\/td><td>1<\/td><\/tr>/);
+  const card = cardFor(html, mixed);
+  assert.doesNotMatch(card, /responses-table|<table|<tr|All revisions|Previous revisions/);
+  const links = linksOf(card);
+  assert.deepEqual(links, [ids.s6, ids.s2, ids.s4, ids.s3, ids.s5].map((r) => `/questionnaires/${mixed}/responses/${r}`));
+  assert.doesNotMatch(card, new RegExp(ids.d1));
+  assert.doesNotMatch(card, new RegExp(ids.s1));
+  assert.match(card, /Revision 3/);
+  assert.match(card, /Revision 2/);
+  assert.match(card, new RegExp(`href="/questionnaires/${mixed}/responses">Responses<`));
   assert.match(card, /Revision 3 · 1 question</);
-  assert.doesNotMatch(card, /<dl|class="stat/);
+  assert.ok(store.list({ status: "all" }).questionnaires.every((item) => !("recent_responses" in item)), "store.list contract has no preview field");
+  assert.deepEqual(store.get(mixed).response_counts, { total: 4, drafts: 1, submitted: 3 });
+  assert.deepEqual(store.get(mixed, 2).response_counts, { total: 2, drafts: 0, submitted: 2 });
+  // Detail link shows the historical revision's answers.
+  const detail = await (await fetch(`${baseUrl}${links[1]}`, { headers: trustedHeaders })).text();
+  assert.match(detail, /Revision 2/);
+  assert.match(detail, /two/);
+});
 
-  const older = cardFor(html, olderOnly.questionnaire_id);
-  assert.match(older, /<tr class="total"><th scope="row">All revisions<\/th><td>3<\/td><td>2<\/td><\/tr>/);
-  assert.match(older, /<tr class="sub"><th scope="row">Revision 2 \(current\)<\/th><td>0<\/td><td>0<\/td><\/tr>/);
-  assert.match(older, /<tr class="sub"><th scope="row">Previous revisions<\/th><td>3<\/td><td>2<\/td><\/tr>/);
+test("card preview fills leftover places with drafts by update time, with ID tie break", async () => {
+  const id = store.create({ title: "Fill", questions: questionsOf("one") }).questionnaire_id;
+  const tie = "2026-05-01T00:00:00.000Z";
+  const s1 = makeResponse(id, 1, "submitted", "a", { times: { submitted: "2026-05-02T00:00:00.000Z" } });
+  const s2 = makeResponse(id, 1, "submitted", "b", { times: { submitted: "2026-05-03T00:00:00.000Z" } });
+  const d1 = makeResponse(id, 1, "draft", "c", { times: { updated: tie } });
+  const d2 = makeResponse(id, 1, "draft", "d", { times: { updated: tie } });
+  const d3 = makeResponse(id, 1, "draft", "e", { times: { updated: "2026-05-09T00:00:00.000Z" } });
+  const d4 = makeResponse(id, 1, "draft", "f", { times: { updated: "2026-04-01T00:00:00.000Z" } });
+  const [tieFirst, tieSecond] = [d1, d2].sort();
+  const html = await (await fetch(`${baseUrl}/questionnaires`, { headers: trustedHeaders })).text();
+  const links = linksOf(cardFor(html, id));
+  assert.deepEqual(links, [s2, s1, d3, tieFirst, tieSecond].map((r) => `/questionnaires/${id}/responses/${r}`));
+  assert.ok(!links.some((link) => link.endsWith(d4)));
+  const again = linksOf(cardFor(await (await fetch(`${baseUrl}/questionnaires`, { headers: trustedHeaders })).text(), id));
+  assert.deepEqual(again, links, "order is stable across requests");
+});
 
-  const zero = cardFor(html, empty.questionnaire_id);
-  assert.match(zero, /<tr class="total"><th scope="row">All revisions<\/th><td>0<\/td><td>0<\/td><\/tr>/);
-  assert.match(zero, /<tr class="sub"><th scope="row">Previous revisions<\/th><td>0<\/td><td>0<\/td><\/tr>/);
+test("card preview handles drafts only, no responses, names, anonymity, escaping and isolation", async () => {
+  const draftsOnly = store.create({ title: "Drafts", questions: questionsOf("a") }).questionnaire_id;
+  for (let index = 0; index < 7; index += 1) makeResponse(draftsOnly, 1, "draft", `d${index}`, { times: { updated: `2026-06-0${index + 1}T00:00:00.000Z` } });
+  const none = store.create({ title: "None", questions: questionsOf("b") }).questionnaire_id;
+  store.update(none, { questions: questionsOf("c") });
+  const named = store.create({ title: "Named", questions: questionsOf("d"), authentication_type: "self_report" }).questionnaire_id;
+  const other = store.create({ title: "Other", questions: questionsOf("e") }).questionnaire_id;
+  makeResponse(other, 1, "submitted", "x", { times: { submitted: "2026-07-09T00:00:00.000Z" } });
+  const personId = makeResponse(named, 1, "submitted", "p", { respondent: { name: "Ada <b>Lovelace</b>", email: "ada@example.test" }, times: { submitted: "2026-07-01T00:00:00.000Z" } });
+  makeResponse(named, 1, "draft", "q", { times: { updated: "2026-07-02T00:00:00.000Z" } });
 
-  const one = cardFor(html, single.questionnaire_id);
-  assert.match(one, /<tr class="total"><th scope="row">All revisions<\/th><td>1<\/td><td>1<\/td><\/tr>/);
-  assert.doesNotMatch(one, /class="sub"/);
+  const html = await (await fetch(`${baseUrl}/questionnaires`, { headers: trustedHeaders })).text();
+  const draftCard = cardFor(html, draftsOnly);
+  assert.equal(linksOf(draftCard).length, 5);
+  assert.equal([...draftCard.matchAll(/>Draft</g)].length >= 5, true);
+  assert.doesNotMatch(draftCard, /Submitted/);
+  assert.match(draftCard, /2026-06-07T00:00:00\.000Z/);
+  assert.doesNotMatch(draftCard, /2026-06-02T00:00:00\.000Z/);
+
+  const noneCard = cardFor(html, none);
+  assert.equal(linksOf(noneCard).length, 0);
+  assert.match(noneCard, /No responses yet/);
+  assert.doesNotMatch(noneCard, /<table|recent-link/);
+
+  const namedCard = cardFor(html, named);
+  assert.match(namedCard, /Ada &lt;b&gt;Lovelace&lt;\/b&gt;/);
+  assert.doesNotMatch(namedCard, /<b>Lovelace|ada@example\.test|edit_token|answers/);
+  assert.deepEqual(linksOf(namedCard)[0], `/questionnaires/${named}/responses/${personId}`);
+  assert.equal(linksOf(namedCard).length, 2);
+  assert.doesNotMatch(namedCard, new RegExp(`/questionnaires/${other}/`));
+  assert.equal(linksOf(cardFor(html, other)).length, 1);
 });
 
 test("dashboard defaults to open questionnaires and paginates, searches and filters on the server", async () => {

@@ -854,6 +854,27 @@ export class QuestionnaireStore {
     return { questionnaires, total, limit: safeLimit, offset: safeOffset, has_more: safeOffset + rows.length < total };
   }
 
+  // Private admin dashboard only; deliberately not part of list() or any MCP output.
+  // Dashboard preview: per questionnaire, up to `limit` response summaries across every revision.
+  // Submissions come first (newest submitted_at), then drafts (newest updated_at); ties break on ID.
+  // Selects metadata columns only, so answers and edit-token hashes never leave SQLite.
+  recentResponses(ids, limit = 5) {
+    const result = new Map(ids.map((id) => [id, []]));
+    if (!ids.length) return result;
+    const safeLimit = Math.max(1, Math.min(Number.isSafeInteger(limit) ? limit : 5, 20));
+    const placeholders = ids.map(() => "?").join(",");
+    const rows = this.db.prepare(`SELECT * FROM (
+        SELECT r.id, r.questionnaire_id, r.revision, r.status, r.version, r.created_at, r.updated_at, r.submitted_at,
+          r.respondent_name, r.respondent_email, r.email_verified_at, v.authentication_type,
+          row_number() OVER (PARTITION BY r.questionnaire_id ORDER BY r.status = 'submitted' DESC,
+            CASE WHEN r.status = 'submitted' THEN coalesce(r.submitted_at, r.updated_at) ELSE r.updated_at END DESC, r.id ASC) AS position
+        FROM responses r JOIN questionnaire_revisions v ON v.questionnaire_id = r.questionnaire_id AND v.revision = r.revision
+        WHERE r.questionnaire_id IN (${placeholders})
+      ) WHERE position <= ? ORDER BY questionnaire_id, position`).all(...ids, safeLimit);
+    for (const row of rows) result.get(row.questionnaire_id).push(this.responseSummary(row));
+    return result;
+  }
+
   // One grouped query for a page of questionnaires. Splits each questionnaire's responses into
   // the current revision and every earlier revision. Does not touch get().response_counts.
   responseTotals(ids) {

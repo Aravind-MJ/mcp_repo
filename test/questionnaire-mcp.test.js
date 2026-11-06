@@ -168,6 +168,7 @@ test("manages revisioned questionnaires and signed URLs through the real MCP pro
     assert.match(revisionOne.url, /\/r\/1\?expires=/);
     const listed = (await client.callTool({ name: "list_questionnaires", arguments: {} })).structuredContent;
     assert.equal(listed.questionnaires[0].questionnaire_id, created.questionnaire_id);
+    assert.ok(listed.questionnaires.every((item) => !("recent_responses" in item)), "MCP list exposes no dashboard preview field");
 
     const customShare = (await client.callTool({
       name: "get_questionnaire_signed_url",
