@@ -78,7 +78,7 @@ Enter the credential provisioned by the service owner only at the hidden credent
 | `create_questionnaire` | Create revision 1 and return a one-week signed latest-revision answer URL. |
 | `update_questionnaire` | Create a new immutable revision and return the stable latest-revision URL; omitted fields are preserved. |
 | `get_questionnaire` | Read the current or an exact revision, response counts, and a matching fresh signed URL. |
-| `list_questionnaires` | List current questionnaires and counts with pagination. |
+| `list_questionnaires` | List current questionnaires and counts with pagination. Each item has `response_counts` for its current revision and `response_totals` (`all`, `current`, `previous`) across all revisions. |
 | `get_questionnaire_signed_url` | Mint a latest-revision link by default, or an exact-revision link when `revision` is supplied, valid from 60 seconds through one year. |
 | `submit_questionnaire_response` | Submit complete answers directly through MCP. `anonymous` takes no respondent, `self_report` requires name and email, and `email_verified` also needs `response_id` and `verification_proof`. |
 | `request_questionnaire_email_verification` | For `email_verified` questionnaires: email a six-digit code to the respondent and return the pending `response_id`. Pass that `response_id` again to resend or change the email. |

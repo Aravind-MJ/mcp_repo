@@ -106,12 +106,25 @@ test("conceals the Decision call log unless Caddy marks Basic Auth as trusted", 
     assert.match(csp, /frame-ancestors 'none'/);
     assert.match(csp, /base-uri 'none'/);
     assert.match(csp, /form-action 'self'/);
-    assert.doesNotMatch(csp, /unsafe-inline|unsafe-eval|script-src/);
+    assert.match(csp, /script-src 'nonce-/);
+    assert.doesNotMatch(csp, /unsafe-inline|unsafe-eval/);
     const nonce = csp.match(/style-src 'nonce-([A-Za-z0-9+/=]+)'/)?.[1];
     assert.ok(nonce);
     assert.ok((await shown.text()).includes(`<style nonce="${nonce}">`));
   }
   assert.equal((await fetch(`${baseUrl}/artifacts/decisions/logs/anything`)).status, 404);
+});
+
+test("copies the existing MCP bearer token only for a trusted dashboard", async () => {
+  const hidden = await fetch(`${baseUrl}/artifacts/mcp-token`);
+  assert.equal(hidden.status, 404);
+  const token = await fetch(`${baseUrl}/artifacts/mcp-token`, { headers: trustedHeaders });
+  assert.equal(token.status, 200);
+  assert.equal(token.headers.get("cache-control"), "no-store");
+  assert.equal(await token.text(), sharedSecret);
+  const html = await logPage();
+  assert.match(html, /id="copy-mcp-token"/);
+  assert.match(html, /\/artifacts\/mcp-token/);
 });
 
 async function logPage(query = "") {
@@ -212,7 +225,7 @@ test("renders logged markup inertly and never exposes credentials", async () => 
   await callTool("make_decisions", { state: "fail upstream", questions: { relevant } });
   await callTool('<svg onload="alert(1)">', { note: "</details><script>alert(2)</script>" });
 
-  const html = await logPage();
+  const html = (await logPage()).replace(/<script nonce="[^"]+">[\s\S]*?<\/script>/, "");
   assert.doesNotMatch(html, /<script|<img src=x|<svg onload|<b>bold<\/b>/i);
   assert.match(html, /&lt;\/code&gt;&lt;\/pre&gt;&lt;script&gt;alert\(&#39;state&#39;\)&lt;\/script&gt;/);
   assert.match(html, /&lt;\/details&gt;&lt;script&gt;alert\(2\)&lt;\/script&gt;/);

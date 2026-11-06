@@ -149,6 +149,7 @@ function renderArtifactGallery(artifacts, deletedArtifactId = "", tags = [], sel
 .tag-filters{display:flex;flex-wrap:wrap;gap:8px;width:min(1180px,calc(100% - 32px));margin:20px auto 0}.tag-filters a{border:1px solid var(--line);border-radius:999px;padding:6px 12px;color:var(--text);text-decoration:none}.tag-filters a[aria-current="true"]{background:var(--accent);color:var(--bg)}.tag-filters a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 </style></head><body>
 <header><div class="brand"><img src="/logo.svg" alt="" width="62" height="62"><div><p class="eyebrow">Private index</p><h1>Artifacts</h1></div></div><div class="count">${artifacts.length} ${artifacts.length === 1 ? "artifact" : "artifacts"}</div></header>
+<div class="tag-filters"><button type="button" class="share-button" id="copy-mcp-token" style="position:static;opacity:1;transform:none;width:auto;height:auto;padding:8px 12px">Copy MCP token</button></div>
 ${filters}${notice}<div id="copy-status" class="copy-status" role="status" aria-live="polite"></div><main>${content}</main>
 <script>
 const copyStatus = document.getElementById("copy-status");
@@ -184,6 +185,24 @@ for (const trigger of document.querySelectorAll("[data-delete-dialog]")) {
 for (const button of document.querySelectorAll(".cancel-delete")) {
   button.addEventListener("click", () => button.closest("dialog")?.close());
 }
+document.getElementById("copy-mcp-token")?.addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    const response = await fetch("/artifacts/mcp-token");
+    if (!response.ok) throw new Error("Could not read the MCP token");
+    await navigator.clipboard.writeText(await response.text());
+    copyStatus.textContent = "Copied the existing MCP bearer token.";
+    copyStatus.classList.remove("error");
+    copyStatus.classList.add("visible");
+    setTimeout(() => copyStatus.classList.remove("visible"), 5000);
+  } catch (error) {
+    copyStatus.textContent = error.message;
+    copyStatus.classList.add("visible", "error");
+  } finally {
+    button.disabled = false;
+  }
+});
 for (const dialog of document.querySelectorAll(".delete-dialog")) {
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog) dialog.close();
@@ -283,6 +302,19 @@ export async function createApp(config) {
     response.type("html").send(DECISION_LANDING_HTML);
   });
 
+  app.get("/artifacts/mcp-token", async (request, response, next) => {
+    try {
+      const trusted = request.get("x-artifact-basic-auth") === "1" || request.get("x-questionnaire-basic-auth") === "1";
+      securityHeaders(response);
+      response.set("Cache-Control", "no-store");
+      response.set("X-Robots-Tag", "noindex, nofollow");
+      if (!trusted) return response.status(404).type("text").send("Not found");
+      response.type("text/plain").send(await readSharedSecret(config.secretFile));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get(["/artifacts", "/artifacts/"], async (request, response, next) => {
     try {
       const selectedTag = request.query.tag === undefined ? undefined : store.normalizeTags([request.query.tag])[0];
@@ -303,7 +335,7 @@ export async function createApp(config) {
       const deletedArtifactId = await readGalleryFlash(flashValue, config.secretFile);
       securityHeaders(response);
       if (flashValue) response.append("Set-Cookie", galleryFlashCookie("", 0));
-      response.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+      response.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
       response.set("Cache-Control", "private, no-store");
       response.type("html").send(renderArtifactGallery(artifacts, deletedArtifactId, tags, selectedTag));
     } catch (error) {

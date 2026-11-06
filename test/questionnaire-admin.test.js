@@ -79,8 +79,8 @@ test("renders a secure questionnaire index and manages share links and status", 
   const html = await response.text();
   assert.match(html, /Private index/);
   assert.match(html, /Questionnaires/);
-  assert.match(html, /<strong>1<\/strong><span>draft<\/span>/);
-  assert.match(html, /<strong>0<\/strong><span>submitted<\/span>/);
+  assert.match(html, /<tr class="total"><th scope="row">All revisions<\/th><td>0<\/td><td>1<\/td><\/tr>/);
+  assert.doesNotMatch(html, /Previous revisions/);
   assert.match(html, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>alert\("x"\)<\/script>/);
   assert.match(html, new RegExp(`href="/questionnaires/${questionnaire.questionnaire_id}/responses"`));
@@ -282,4 +282,122 @@ test("renders uploaded images and repeatable rows, and serves attachments only b
   assert.equal((await fetch(`${baseUrl}/questionnaires/${id}/responses/${other.responseId}/attachments/${receipt.attachment_id}`, { headers: trustedHeaders })).status, 404);
   assert.equal((await fetch(`${baseUrl}/questionnaires/${id}/responses/${draft.responseId}/attachments/${"A".repeat(24)}`, { headers: trustedHeaders })).status, 404);
   assert.equal((await fetch(`${baseUrl}/questionnaires/${id}/responses/${draft.responseId}/attachments/not-an-id`, { headers: trustedHeaders })).status, 404);
+});
+
+function cardFor(html, id) {
+  return html.match(new RegExp(`<article class="card"[^>]*>(?:(?!</article>)[\\s\\S])*?data-sign-questionnaire="${id}"[\\s\\S]*?</article>`))?.[0] ?? "";
+}
+
+function addResponses(id, revision, submitted, drafts) {
+  const respondent = undefined;
+  for (let index = 0; index < submitted; index += 1) {
+    const created = store.createResponse(id, revision);
+    store.submitResponse(id, revision, created.response_id, created.edit_token, { q: `s${index}` }, respondent);
+  }
+  for (let index = 0; index < drafts; index += 1) {
+    const created = store.createResponse(id, revision);
+    store.saveResponse(id, revision, created.response_id, created.edit_token, { q: `d${index}` });
+  }
+}
+
+test("dashboard cards total responses across all revisions and split current from previous", async () => {
+  const questions = (name) => [{ id: "q", type: "short_text", title: name }];
+  const mixed = store.create({ title: "Mixed", questions: questions("one") });
+  const id = mixed.questionnaire_id;
+  addResponses(id, 1, 2, 1);
+  store.update(id, { questions: questions("two") });
+  addResponses(id, 2, 1, 0);
+  store.update(id, { questions: questions("three") });
+  addResponses(id, 3, 1, 2);
+  const olderOnly = store.create({ title: "Older only", questions: questions("a") });
+  addResponses(olderOnly.questionnaire_id, 1, 3, 2);
+  store.update(olderOnly.questionnaire_id, { questions: questions("b") });
+  const empty = store.create({ title: "Empty", questions: questions("e") });
+  store.update(empty.questionnaire_id, { questions: questions("f") });
+  const single = store.create({ title: "Single", questions: questions("s") });
+  addResponses(single.questionnaire_id, 1, 1, 1);
+
+  // Revision-scoped contract is unchanged.
+  assert.deepEqual(store.get(id).response_counts, { total: 3, drafts: 2, submitted: 1 });
+  assert.deepEqual(store.get(id, 1).response_counts, { total: 3, drafts: 1, submitted: 2 });
+
+  const html = await (await fetch(`${baseUrl}/questionnaires`, { headers: trustedHeaders })).text();
+  const card = cardFor(html, id);
+  assert.match(card, /<tr class="total"><th scope="row">All revisions<\/th><td>4<\/td><td>3<\/td><\/tr>/);
+  assert.match(card, /<tr class="sub"><th scope="row">Revision 3 \(current\)<\/th><td>1<\/td><td>2<\/td><\/tr>/);
+  assert.match(card, /<tr class="sub"><th scope="row">Previous revisions<\/th><td>3<\/td><td>1<\/td><\/tr>/);
+  assert.match(card, /Revision 3 · 1 question</);
+  assert.doesNotMatch(card, /<dl|class="stat/);
+
+  const older = cardFor(html, olderOnly.questionnaire_id);
+  assert.match(older, /<tr class="total"><th scope="row">All revisions<\/th><td>3<\/td><td>2<\/td><\/tr>/);
+  assert.match(older, /<tr class="sub"><th scope="row">Revision 2 \(current\)<\/th><td>0<\/td><td>0<\/td><\/tr>/);
+  assert.match(older, /<tr class="sub"><th scope="row">Previous revisions<\/th><td>3<\/td><td>2<\/td><\/tr>/);
+
+  const zero = cardFor(html, empty.questionnaire_id);
+  assert.match(zero, /<tr class="total"><th scope="row">All revisions<\/th><td>0<\/td><td>0<\/td><\/tr>/);
+  assert.match(zero, /<tr class="sub"><th scope="row">Previous revisions<\/th><td>0<\/td><td>0<\/td><\/tr>/);
+
+  const one = cardFor(html, single.questionnaire_id);
+  assert.match(one, /<tr class="total"><th scope="row">All revisions<\/th><td>1<\/td><td>1<\/td><\/tr>/);
+  assert.doesNotMatch(one, /class="sub"/);
+});
+
+test("dashboard defaults to open questionnaires and paginates, searches and filters on the server", async () => {
+  const get = async (query = "") => (await fetch(`${baseUrl}/questionnaires${query}`, { headers: trustedHeaders })).text();
+  const make = (title, description = "") => store.create({ title, description, questions: [{ id: "q", type: "short_text", title: "Q" }] }).questionnaire_id;
+  const ids = [];
+  for (let index = 1; index <= 14; index += 1) ids.push(make(`Survey ${String(index).padStart(2, "0")}`, index === 3 ? "Quarterly 100% review_final" : ""));
+  const closedId = make("Archive Closed", "Legacy");
+  store.setStatus(closedId, "closed");
+  const titles = (html) => [...html.matchAll(/<h2><a [^>]*>([^<]*)<\/a><\/h2>/g)].map((match) => match[1]);
+
+  const first = await get();
+  assert.equal(titles(first).length, 12);
+  assert.ok(!titles(first).includes("Archive Closed"));
+  assert.match(first, /Showing 1\u201312 of 14/);
+  assert.match(first, /Page 1 of 2/);
+  assert.match(first, /<option value="open" selected>/);
+  assert.match(first, /href="\/questionnaires\?offset=12"/);
+  assert.doesNotMatch(first, /Previous<\/a>/);
+
+  const second = await get("?offset=12");
+  assert.equal(titles(second).length, 2);
+  assert.match(second, /Showing 13\u201314 of 14/);
+  assert.match(second, /href="\/questionnaires"[^>]*>Previous|rel="prev" href="\/questionnaires"/);
+  assert.equal(titles(await get("?offset=999")).length, 2, "excessive offsets clamp to the last page");
+
+  assert.deepEqual(titles(await get("?status=closed")), ["Archive Closed"]);
+  assert.equal(titles(await get("?status=all")).length, 12);
+  assert.match(await get("?status=all"), /Showing 1\u201312 of 15/);
+  assert.equal(titles(await get("?status=bogus")).length, 12, "unknown status falls back to open");
+
+  assert.deepEqual(titles(await get("?q=survey%2007")), ["Survey 07"]);
+  assert.deepEqual(titles(await get("?q=QUARTERLY")), ["Survey 03"], "matches description, case-insensitively");
+  assert.deepEqual(titles(await get(`?q=${ids[4]}`)), ["Survey 05"], "matches the ID");
+  assert.deepEqual(titles(await get("?q=100%25")), ["Survey 03"], "percent is literal");
+  assert.deepEqual(titles(await get("?q=review_f")), ["Survey 03"]);
+  assert.deepEqual(titles(await get("?q=review%5Ff")), ["Survey 03"]);
+  assert.deepEqual(titles(await get("?q=%25")), ["Survey 03"], "bare wildcard does not match everything");
+  assert.deepEqual(titles(await get("?q=_")), ["Survey 03"], "underscore is literal");
+  assert.deepEqual(titles(await get("?q=archive")), [], "open filter hides closed matches");
+  assert.deepEqual(titles(await get("?q=archive&status=all")), ["Archive Closed"]);
+  assert.deepEqual(titles(await get("?q=archive&status=closed")), ["Archive Closed"]);
+  assert.deepEqual(titles(await get("?q=legacy&status=open")), []);
+
+  const filteredPage = await get("?q=survey&status=all");
+  assert.match(filteredPage, /Showing 1\u201312 of 14/);
+  assert.match(filteredPage, /href="\/questionnaires\?q=survey&amp;status=all&amp;offset=12"/);
+  const filteredSecond = await get("?q=survey&status=all&offset=12");
+  assert.match(filteredSecond, /rel="prev" href="\/questionnaires\?q=survey&amp;status=all"/);
+  assert.match(filteredSecond, /value="survey"/);
+
+  const none = await get("?q=zzzz");
+  assert.match(none, /No matching questionnaires/);
+  assert.match(none, /Showing 0 of 0/);
+  assert.match(none, /href="\/questionnaires">Reset filters/);
+  assert.match(none, /href="\/questionnaires">Clear/);
+  const noneFar = await get("?q=zzzz&offset=999");
+  assert.match(noneFar, /Page 1 of 1|Showing 0 of 0/);
+  assert.doesNotMatch(noneFar, /Previous<\/a>|Next<\/a>|Page \d+ of/, "no pagination for an empty result");
 });

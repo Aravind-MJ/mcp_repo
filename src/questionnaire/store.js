@@ -587,6 +587,10 @@ export function validateAnswers(questions, raw, { final = false, owns = NO_ATTAC
 const RESPONSE_SELECT = `SELECT r.*, v.authentication_type FROM responses r
   JOIN questionnaire_revisions v ON v.questionnaire_id = r.questionnaire_id AND v.revision = r.revision`;
 
+function emptyResponseTotals() {
+  return { all: { drafts: 0, submitted: 0 }, current: { drafts: 0, submitted: 0 }, previous: { drafts: 0, submitted: 0 } };
+}
+
 export class QuestionnaireStore {
   constructor(config) {
     this.config = {
@@ -821,12 +825,54 @@ export class QuestionnaireStore {
     };
   }
 
-  list({ limit = 50, offset = 0 } = {}) {
+  list({ limit = 50, offset = 0, search, status } = {}) {
     const safeLimit = Math.max(1, Math.min(Number.isSafeInteger(limit) ? limit : 50, 200));
     const safeOffset = Math.max(0, Number.isSafeInteger(offset) ? offset : 0);
-    const rows = this.db.prepare(`SELECT q.id FROM questionnaires q ORDER BY q.updated_at DESC LIMIT ? OFFSET ?`).all(safeLimit, safeOffset);
-    const total = Number(this.db.prepare("SELECT count(*) AS count FROM questionnaires").get().count);
-    return { questionnaires: rows.map((row) => this.get(row.id)), total, limit: safeLimit, offset: safeOffset, has_more: safeOffset + rows.length < total };
+    if (status !== undefined && !["open", "closed", "all"].includes(status)) throw serviceError("status must be open, closed, or all");
+    const conditions = [];
+    const params = [];
+    if (status === "open" || status === "closed") {
+      conditions.push("q.status = ?");
+      params.push(status);
+    }
+    const term = typeof search === "string" ? search.trim() : "";
+    if (term) {
+      // Escape LIKE wildcards so the term matches literally; SQLite LIKE ignores ASCII case.
+      const pattern = `%${term.replace(/[\\%_]/g, "\\$&")}%`;
+      conditions.push("(q.id LIKE ? ESCAPE '\\' OR r.title LIKE ? ESCAPE '\\' OR r.description LIKE ? ESCAPE '\\')");
+      params.push(pattern, pattern, pattern);
+    }
+    const from = "FROM questionnaires q JOIN questionnaire_revisions r ON r.questionnaire_id = q.id AND r.revision = q.current_revision"
+      + (conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "");
+    const rows = this.db.prepare(`SELECT q.id ${from} ORDER BY q.updated_at DESC, q.id LIMIT ? OFFSET ?`).all(...params, safeLimit, safeOffset);
+    const total = Number(this.db.prepare(`SELECT count(*) AS count ${from}`).get(...params).count);
+    const totals = this.responseTotals(rows.map((row) => row.id));
+    const questionnaires = rows.map((row) => {
+      const questionnaire = this.get(row.id);
+      return { ...questionnaire, response_totals: totals.get(row.id) ?? emptyResponseTotals() };
+    });
+    return { questionnaires, total, limit: safeLimit, offset: safeOffset, has_more: safeOffset + rows.length < total };
+  }
+
+  // One grouped query for a page of questionnaires. Splits each questionnaire's responses into
+  // the current revision and every earlier revision. Does not touch get().response_counts.
+  responseTotals(ids) {
+    const result = new Map(ids.map((id) => [id, emptyResponseTotals()]));
+    if (!ids.length) return result;
+    const placeholders = ids.map(() => "?").join(",");
+    const rows = this.db.prepare(`SELECT r.questionnaire_id AS id, r.revision = q.current_revision AS is_current,
+        sum(r.status = 'draft') AS drafts, sum(r.status = 'submitted') AS submitted
+        FROM responses r JOIN questionnaires q ON q.id = r.questionnaire_id
+        WHERE r.questionnaire_id IN (${placeholders}) GROUP BY r.questionnaire_id, is_current`).all(...ids);
+    for (const row of rows) {
+      const scope = result.get(row.id)[row.is_current ? "current" : "previous"];
+      scope.drafts = Number(row.drafts || 0);
+      scope.submitted = Number(row.submitted || 0);
+    }
+    for (const totals of result.values()) {
+      totals.all = { drafts: totals.current.drafts + totals.previous.drafts, submitted: totals.current.submitted + totals.previous.submitted };
+    }
+    return result;
   }
 
   setStatus(id, status) {

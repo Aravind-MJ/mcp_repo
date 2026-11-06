@@ -431,3 +431,29 @@ test("rejects invalid edit tokens, unknown answers, closed forms, and deletes ca
   assert.throws(() => store.get(questionnaire.questionnaire_id), /not found/);
   assert.throws(() => store.listResponses(questionnaire.questionnaire_id), /not found/);
 });
+
+test("list filters by search and status before counting and paging", () => {
+  const make = (title, description) => store.create({ title, description, questions: [{ id: "q", type: "short_text", title: "Q" }] });
+  const alpha = make("Alpha", "first");
+  make("Beta", "100% sure");
+  make("Gamma_x", "");
+  const delta = make("Delta", "later");
+  store.setStatus(delta.questionnaire_id, "closed");
+  store.update(alpha.questionnaire_id, { title: "Alpha renamed" });
+  assert.equal(store.list().total, 4, "defaults stay unfiltered");
+  assert.equal(store.list({ status: "open" }).total, 3);
+  assert.equal(store.list({ status: "closed" }).questionnaires[0].title, "Delta");
+  assert.equal(store.list({ status: "all" }).total, 4);
+  assert.equal(store.list({ search: "renamed" }).total, 1, "searches the latest revision");
+  assert.equal(store.list({ search: "first" }).total, 1);
+  assert.equal(store.list({ search: "100%" }).total, 1);
+  assert.equal(store.list({ search: "%" }).total, 1);
+  assert.equal(store.list({ search: "_" }).total, 1);
+  assert.equal(store.list({ search: alpha.questionnaire_id.toLowerCase() }).total, 1);
+  assert.equal(store.list({ search: "later", status: "open" }).total, 0);
+  const paged = store.list({ status: "open", limit: 2, offset: 2 });
+  assert.equal(paged.total, 3);
+  assert.equal(paged.questionnaires.length, 1);
+  assert.equal(paged.has_more, false);
+  assert.throws(() => store.list({ status: "bogus" }), /status must be/);
+});

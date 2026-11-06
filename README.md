@@ -35,7 +35,7 @@ A Node.js personal MCP service hosting multiple MCP modules under one domain. It
 | `GET /decisions/README.md` | Public | Secret-free installation and schema guide |
 | `GET /decisions/SKILL.md` | Public | Companion agent skill |
 | `GET /decisions/logs` | Caddy Basic Auth | Private Decision call log with arguments, results, failures, and costs |
-| `GET /questionnaires` | Caddy Basic Auth | Private questionnaire index with links, status, and response counts |
+| `GET /questionnaires` | Caddy Basic Auth | Private questionnaire index with links, status, and response counts. It lists 12 per page and shows only open questionnaires by default. Query parameters `q` (title, description, or ID), `status` (`open`, `closed`, `all`), and `offset` filter and page the results. Each card's table totals responses across all revisions, with a current versus previous revisions split once a questionnaire has more than one revision |
 | `GET /questionnaires/<id>/responses[/<response-id>]` | Caddy Basic Auth | Inspect collected response metadata and answers |
 | `GET /questionnaires/<id>/responses/<response-id>/attachments/<attachment-id>` | Caddy Basic Auth | View one image that belongs to that response |
 | `POST /questionnaires/<id>/{sign,status,delete}` | Caddy Basic Auth + action-scoped CSRF token | Mint links, open/close, or permanently delete from the index |
@@ -91,7 +91,7 @@ The proxy must preserve the query string, Authorization, Content-Type, Range, an
 
 - `create_questionnaire` — creates revision 1 and returns a one-week signed answer URL.
 - `update_questionnaire` — creates a new immutable revision while preserving prior links and responses.
-- `get_questionnaire` / `list_questionnaires` — retrieves definitions, status, and response counts.
+- `get_questionnaire` / `list_questionnaires` — retrieves definitions, status, and response counts. `response_counts` covers only the returned revision. `list_questionnaires` takes only `limit` and `offset` and stays unfiltered (the dashboard `q` and `status` parameters do not apply to MCP). It also returns `response_totals` per item, with `all`, `current`, and `previous` draft and submitted counts across revisions.
 - `get_questionnaire_signed_url` — mints an exact-revision link for 60 seconds through one year.
 - `submit_questionnaire_response` — atomically submits complete answers through MCP, with the identity the questionnaire's mode requires.
 - `request_questionnaire_email_verification` / `verify_questionnaire_email` — the one-time-code steps for `email_verified` questionnaires. The bearer token does not bypass them.
